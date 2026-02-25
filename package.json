@@ -1,0 +1,20 @@
+{
+  "name": "wuxing-agent",
+  "version": "1.0.0",
+  "description": "五行智能体框架 - 具备因果感知和自省能力的自动进化 Agent",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/core": "^1.1.28",
+    "@langchain/langgraph": "^1.1.5",
+    "@langchain/openai": "^1.2.10",
+    "dotenv": "^16.4.7"
+  }
+}
