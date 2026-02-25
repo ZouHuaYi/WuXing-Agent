@@ -1,18 +1,21 @@
 // main.js
 // WuXing-Agent v2.0 —— 象·数·理 三位一体
-// 新增：大运流年（时间衰减）| 梦境合并 | 多模态取象
+// 新增：大运流年（时间衰减）| 梦境合并 | 多模态取象 | 集中配置 | 进化日志
 import "dotenv/config";
 import { HumanMessage } from "@langchain/core/messages";
 import { app, wisdomMemory } from "./src/engine/wuxingGraph.js";
-import { DreamModule } from "./src/engine/dream.js";
 import { VisionModule } from "./src/engine/vision.js";
+import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
+import { logger, EV } from "./src/utils/logger.js";
+import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
 
 const DIVIDER = "─".repeat(54);
 const DOUBLE_DIVIDER = "═".repeat(54);
 
-// ─── 阶段一：人情世故助手（五行主流程）─────────────────
-async function phaseOne() {
+// ─── 阶段一：人情世故助手（五行主流程 + 进化插件）───────
+async function phaseOne(evolution) {
+    logger.info(EV.SYSTEM, "阶段一启动：五行主流程 —— 人情世故助手");
     console.log("\n【阶段一】五行主流程 —— 人情世故助手");
     console.log(DIVIDER);
 
@@ -46,18 +49,19 @@ async function phaseOne() {
         const source = result.foundWisdom ? "经验库直觉命中 ✦ 大运流年加权" : "逻辑推演 → 金反思提炼";
         console.log(`\n[来源：${source}]`);
         console.log(`\n${answer ?? "(无输出)"}`);
+
+        // 进化插件钩子：每轮任务完成后调用，插件自行决策是否触发进化
+        await evolution.afterTask();
     }
 }
 
-// ─── 阶段二：梦境合并（记忆折叠）────────────────────────
-async function phaseTwo() {
+// ─── 阶段二：手动触发完整进化周期──────────────────────
+async function phaseTwo(evolution) {
     console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【阶段二】梦境合并 —— 碎片因果律聚类折叠");
+    console.log("【阶段二】完整进化周期 —— 熵减修剪 + 梦境折叠");
     console.log(DOUBLE_DIVIDER);
-    console.log("系统进入深度自省模式，尝试将多条相似准则合并为高阶「道」...\n");
-
-    const dreamer = new DreamModule(wisdomMemory);
-    await dreamer.startDreaming(2); // 至少 2 条即触发（演示用，生产环境建议 ≥ 5）
+    logger.info(EV.SYSTEM, "阶段二：手动触发完整进化周期");
+    await evolution.fullCycle();
 }
 
 // ─── 阶段三：多模态视觉感知（取象比类）──────────────────
@@ -119,6 +123,9 @@ async function phaseThree() {
 
 // ─── 主入口 ──────────────────────────────────────────────
 async function runSystem() {
+    // 初始化进化日志（写入 logs/evolution.log）
+    await logger.init(cfg.evolution.logFile);
+
     console.log(DOUBLE_DIVIDER);
     console.log("  WuXing-Agent  五行智能体框架  v2.0");
     console.log("  象·数·理 | 大运流年 | 梦境合并 | 多模态取象");
@@ -127,10 +134,14 @@ async function runSystem() {
     // 木的延续：从磁盘恢复历次进化成果
     await wisdomMemory.loadFromDisk();
     const initialCount = wisdomMemory.getAllDocs().length;
+    logger.info(EV.SYSTEM, `经验库就绪，积累 ${initialCount} 条因果律`);
     console.log(`\n[系统] 经验库就绪，当前积累 ${initialCount} 条因果律`);
 
-    await phaseOne();
-    await phaseTwo();
+    // 创建进化插件（钩子式注入，不修改引擎核心）
+    const evolution = new EvolutionPlugin(wisdomMemory);
+
+    await phaseOne(evolution);
+    await phaseTwo(evolution);
     await phaseThree();
 
     // 最终进化报告
@@ -147,7 +158,9 @@ async function runSystem() {
             console.log(`  ${i + 1}. [${age}] ${d.result}`);
         });
     }
+    logger.info(EV.SYSTEM, `本轮进化完毕，经验库 ${initialCount} → ${finalDocs.length} 条`);
     console.log(DOUBLE_DIVIDER);
+    console.log(`\n[日志] 进化记录已写入 ${cfg.evolution.logFile}`);
 }
 
 runSystem().catch((err) => {

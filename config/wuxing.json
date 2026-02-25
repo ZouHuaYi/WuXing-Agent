@@ -1,0 +1,31 @@
+{
+  "_comment": "WuXing-Agent 五行智能体框架 — 集中配置文件",
+
+  "models": {
+    "reasoning": "my-chat",
+    "sensing":   "my-chat",
+    "vision":    "my-chat",
+    "dream":     "my-chat",
+    "embedding": "BAAI/bge-m3"
+  },
+
+  "temperature": {
+    "reasoning": 0.7,
+    "sensing":   0.0,
+    "dream":     0.3
+  },
+
+  "memory": {
+    "lambda":              0.005,
+    "recallThreshold":     0.70,
+    "semanticPreFilter":   0.70,
+    "entropyTriggerEvery": 10,
+    "dreamMinDocs":        4
+  },
+
+  "evolution": {
+    "dreamTriggerEvery":   3,
+    "pairwiseMaxDocs":     8,
+    "logFile":             "logs/evolution.log"
+  }
+}

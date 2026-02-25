@@ -6,8 +6,13 @@ import { ChatOpenAI } from "@langchain/openai";
 import { WisdomMemory } from "./vectorStore.js";
 import { sense } from "./waterSensor.js";
 import { prune } from "./entropyReducer.js";
+import cfg from "../../config/wuxing.json" with { type: "json" };
+import { logger, EV } from "../utils/logger.js";
 
-const llm = new ChatOpenAI({ modelName: "gpt-4-turbo", temperature: 0.7 });
+const llm = new ChatOpenAI({
+    modelName: cfg.models.reasoning,
+    temperature: cfg.temperature.reasoning,
+});
 
 export const wisdomMemory = new WisdomMemory();
 
@@ -33,8 +38,8 @@ async function waterNode(state) {
     console.log("\n[水-感知] 正在解析环境流...");
 
     const ctx = await sense(lastInput);
-    console.log(
-        `[水-感知] 情绪: ${ctx.tone} | 紧迫度: ${ctx.urgency.toFixed(2)}` +
+    logger.info(EV.WATER,
+        `情绪: ${ctx.tone} | 紧迫度: ${ctx.urgency.toFixed(2)}` +
         (ctx.temporalHints ? ` | 时序: ${ctx.temporalHints}` : "")
     );
 
@@ -49,10 +54,10 @@ async function intuitionNode(state) {
     const wisdom = await wisdomMemory.recall(lastInput);
 
     if (wisdom) {
-        console.log(`[火-直觉] 因果律命中，直接输出`);
+        logger.info(EV.FIRE, "因果律命中，直接输出");
         return { foundWisdom: wisdom, status: "completed" };
     }
-    console.log("[火-直觉] 经验库未覆盖，转交土层...");
+    logger.info(EV.FIRE, "经验库未覆盖，转交土层...");
     return { status: "reasoning" };
 }
 
@@ -60,7 +65,7 @@ async function intuitionNode(state) {
 // 【土】：逻辑推演节点 —— System 2 慢思考（受水层影响）
 // ─────────────────────────────────────────────
 async function reasoningNode(state) {
-    console.log("[土-逻辑] 启动深层推理...");
+    logger.info(EV.EARTH, "启动深层推理...");
     const ctx = state.environmentContext;
 
     // 土克水：用逻辑锚定水层带来的变数
@@ -83,7 +88,7 @@ async function reasoningNode(state) {
 // 【金】：反思与修剪节点 —— 提炼因果律 + 触发熵减
 // ─────────────────────────────────────────────
 async function reflectionNode(state) {
-    console.log("[金-反思] 正在提炼因果律...");
+    logger.info(EV.METAL, "正在提炼因果律...");
     interactionCount++;
 
     // messages[0] 是初始用户输入，messages[-1] 是 LLM 回复
@@ -101,16 +106,13 @@ async function reflectionNode(state) {
     const rule = evaluation.content.trim();
     if (rule !== "【忽略】") {
         await wisdomMemory.memorize(userTask, rule);
-        console.log(
-            `[木-生长] 因果律已写入（当前库存 ${wisdomMemory.getAllDocs().length} 条）：\n  "${rule}"`
-        );
     } else {
-        console.log("[金-反思] 本次推理无提炼价值，不写入记忆。");
+        logger.info(EV.METAL, "本次推理无提炼价值，不写入记忆。");
     }
 
-    // 金克木：每 10 次交互触发熵减修剪
-    if (interactionCount % 10 === 0) {
-        console.log(`\n[金克木] 第 ${interactionCount} 次交互，触发定期熵减...`);
+    // 金克木：每 N 次交互触发熵减修剪（N 从配置读取）
+    if (interactionCount % cfg.memory.entropyTriggerEvery === 0) {
+        logger.info(EV.ENTROPY, `第 ${interactionCount} 次交互，触发定期熵减...`);
         await prune(wisdomMemory);
     }
 

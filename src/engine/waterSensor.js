@@ -2,8 +2,12 @@
 // 【水】：环境感知模块 —— 像水一样渗透进任务边界，解析情绪与时序上下文
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
+import cfg from "../../config/wuxing.json" with { type: "json" };
 
-const llm = new ChatOpenAI({ modelName: "gpt-4-turbo", temperature: 0 });
+const llm = new ChatOpenAI({
+    modelName: cfg.models.sensing,
+    temperature: cfg.temperature.sensing,
+});
 
 const SENSE_PROMPT = `你是一个情绪与语境分析器。分析以下用户输入，返回严格的JSON对象（不要加任何markdown代码块包裹）：
 

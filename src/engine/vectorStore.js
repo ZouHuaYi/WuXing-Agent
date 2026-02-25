@@ -6,6 +6,8 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import cfg from "../../config/wuxing.json" with { type: "json" };
+import { logger, EV } from "../utils/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = join(__dirname, "../../data/wisdom.json");
@@ -23,10 +25,18 @@ function cosineSimilarity(a, b) {
 
 export class WisdomMemory {
     /**
-     * @param {number} lambda 时间衰减系数：越大遗忘越快。默认 0.005（约 6 天后权重降至 ~75%）
+     * @param {number} lambda 时间衰减系数（覆盖 config）：越大遗忘越快
      */
-    constructor(lambda = 0.005) {
-        this.embeddings = new OpenAIEmbeddings();
+    constructor(lambda = cfg.memory.lambda) {
+        // 分词模型可通过 EMBEDDING_API_KEY / EMBEDDING_BASE_URL 单独配置
+        // 未设置时自动回退到主模型的 OPENAI_API_KEY / OPENAI_BASE_URL
+        this.embeddings = new OpenAIEmbeddings({
+            modelName:   cfg.models.embedding,
+            apiKey:      process.env.EMBEDDING_API_KEY   ?? process.env.OPENAI_API_KEY,
+            configuration: {
+                baseURL: process.env.EMBEDDING_BASE_URL  ?? process.env.OPENAI_BASE_URL,
+            },
+        });
         this.lambda = lambda;
         // 内部存储：{ content, embedding, metadata: { result, createdAt, confidence } }
         this.vectors = [];
@@ -38,7 +48,7 @@ export class WisdomMemory {
         this.rawDocs = savedData;
         this.vectors = [];
         if (savedData.length > 0) {
-            console.log(`[木-记忆] 正在重建 ${savedData.length} 条经验的向量索引...`);
+            logger.info(EV.WOOD, `正在重建 ${savedData.length} 条经验的向量索引...`);
             for (const d of savedData) {
                 const embedding = await this.embeddings.embedQuery(d.task);
                 this.vectors.push({
@@ -61,11 +71,11 @@ export class WisdomMemory {
                 const raw = await readFile(DATA_PATH, "utf-8");
                 const savedData = JSON.parse(raw);
                 await this.init(savedData);
-                console.log(`[木-记忆] 从磁盘恢复 ${savedData.length} 条因果律`);
+                logger.info(EV.WOOD, `从磁盘恢复 ${savedData.length} 条因果律`);
                 return;
             }
         } catch (e) {
-            console.warn("[木-记忆] 读取磁盘记忆失败，启用空库:", e.message);
+            logger.warn(EV.WOOD, `读取磁盘记忆失败，启用空库: ${e.message}`);
         }
         await this.init([]);
     }
@@ -78,7 +88,7 @@ export class WisdomMemory {
             }
             await writeFile(DATA_PATH, JSON.stringify(this.rawDocs, null, 2), "utf-8");
         } catch (e) {
-            console.warn("[木-记忆] 保存失败:", e.message);
+            logger.warn(EV.WOOD, `保存失败: ${e.message}`);
         }
     }
 
@@ -100,7 +110,7 @@ export class WisdomMemory {
 
         for (const v of this.vectors) {
             const similarity = cosineSimilarity(queryEmbedding, v.embedding);
-            if (similarity < 0.70) continue; // 语义相似度预筛选，减少无效计算
+            if (similarity < cfg.memory.semanticPreFilter) continue; // 语义预筛选
 
             const { result, createdAt, confidence } = v.metadata;
             const hoursPassed = (now - createdAt) / (1000 * 60 * 60);
@@ -113,10 +123,8 @@ export class WisdomMemory {
             }
         }
 
-        if (bestScore > 0.70) {
-            console.log(
-                `[火-直觉] 综合因果得分 ${bestScore.toFixed(3)}（语义×置信×流年），命中经验库`
-            );
+        if (bestScore > cfg.memory.recallThreshold) {
+            logger.info(EV.FIRE, `综合因果得分 ${bestScore.toFixed(3)}（语义×置信×流年），命中经验库`);
             return bestResult;
         }
         return null;
@@ -129,6 +137,7 @@ export class WisdomMemory {
 
         this.vectors.push({ content: task, embedding, metadata: { result, createdAt, confidence } });
         this.rawDocs.push({ task, result, createdAt, confidence });
+        logger.evolution(EV.WOOD, `因果律已固化（库存 ${this.rawDocs.length} 条）：${result}`);
         await this.saveToDisk();
     }
 

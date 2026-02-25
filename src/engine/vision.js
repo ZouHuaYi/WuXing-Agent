@@ -7,9 +7,13 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
+import cfg from "../../config/wuxing.json" with { type: "json" };
+import { logger, EV } from "../utils/logger.js";
 
-// gpt-4o 具备视觉能力，是"取象"的最佳载体
-const visionModel = new ChatOpenAI({ modelName: "gpt-4o", maxTokens: 800 });
+const visionModel = new ChatOpenAI({
+    modelName: cfg.models.vision,
+    maxTokens: 800,
+});
 
 const OBSERVE_PROMPT = `你是一位具备"取象比类"能力的观察者。
 请从以下三个维度解析图像：
@@ -31,7 +35,7 @@ export class VisionModule {
             throw new Error(`图片文件不存在: ${imagePath}`);
         }
 
-        console.log(`\n[水-视觉] 正在取象：${imagePath}`);
+        logger.info(EV.VISION, `正在取象：${imagePath}`);
 
         const imageBuffer = await readFile(imagePath);
         const base64 = imageBuffer.toString("base64");
@@ -50,7 +54,7 @@ export class VisionModule {
             }),
         ]);
 
-        console.log("[水-视觉] 取象完成，已转化为语义流");
+        logger.info(EV.VISION, "取象完成，已转化为语义流");
         return response.content;
     }
 
@@ -66,7 +70,7 @@ export class VisionModule {
                 const desc = await this.captureImageLogic(p);
                 descriptions.push(`[图像 ${p}]\n${desc}`);
             } catch (e) {
-                console.warn(`[水-视觉] 跳过 ${p}: ${e.message}`);
+                logger.warn(EV.VISION, `跳过 ${p}: ${e.message}`);
             }
         }
         return descriptions.join("\n\n---\n\n");
