@@ -37,13 +37,15 @@ export const wisdomMemory = new WisdomMemory();
 let interactionCount = 0;
 
 // ── 状态定义 ─────────────────────────────────────────────
+// 归约器签名：reducer(currentValue, newValue) → mergedValue
+// 标量字段用 (_, y) => y，确保节点的返回值能覆盖旧值
 const AgentState = {
     messages:           { value: (x, y) => x.concat(y), default: () => [] },
-    environmentContext: { value: (x) => x, default: () => null   },
-    foundWisdom:        { value: (x) => x, default: () => null   },
-    status:             { value: (x) => x, default: () => ""     },
-    // 防止工具调用死循环：记录当前任务累计调用轮次
-    toolCallCycles:     { value: (x) => x, default: () => 0      },
+    environmentContext: { value: (_, y) => y,           default: () => null },
+    foundWisdom:        { value: (_, y) => y,           default: () => null },
+    status:             { value: (_, y) => y,           default: () => ""   },
+    // 累计调用轮次：节点已自行做加法，归约器直接替换即可
+    toolCallCycles:     { value: (_, y) => y,           default: () => 0    },
 };
 
 // ─────────────────────────────────────────────
@@ -164,12 +166,31 @@ async function fireToolNode(state) {
 // ─────────────────────────────────────────────
 // 【金】：反思与修剪节点 —— 提炼因果律 + 触发熵减
 // ─────────────────────────────────────────────
-const REFLECTION_PROMPT =
+
+// 安全防御关键词：命中时降低入库门槛（安全准则是高价值内丹）
+const SECURITY_KEYWORDS = [
+    "path", "traversal", "injection", "xss", "csrf", "sanitize",
+    "validate", "encode", "escape", "permission", "privilege",
+    "overflow", "crypto", "hash", "jwt", "auth", "sandbox",
+    "resolve", "startswith", "basename", "realpath",
+];
+
+function detectSecurityContext(text) {
+    const lower = text.toLowerCase();
+    return SECURITY_KEYWORDS.filter((k) => lower.includes(k));
+}
+
+const BASE_REFLECTION_PROMPT =
     "对以下解决方案进行因果质量审计，返回严格的JSON对象（不要任何markdown包裹）：\n" +
     '{"rule":"不超过50字的通用因果准则（以【当...时，应...】表达），若无法提炼则填null",' +
     '"score":0到100的整数（综合适用性、因果强度、逻辑严密度），' +
     '"applicability":"广泛|中等|狭窄",' +
     '"causal_strength":0到100的整数}';
+
+const SECURITY_HINT =
+    "\n\n【特别指示】本回答涉及安全防御编码模式。" +
+    "安全防御准则（如路径校验、输入过滤、权限边界）是高价值的通用因果律，" +
+    "即使适用范围较窄也应积极提炼并给予高分。";
 
 async function reflectionNode(state) {
     logger.info(EV.METAL, "正在进行因果质量审计...");
@@ -182,24 +203,39 @@ async function reflectionNode(state) {
         .find((m) => m._getType?.() === "ai" && typeof m.content === "string" && m.content.trim())
         ?.content ?? "";
 
+    // 安全上下文检测：综合用户任务 + AI 回答
+    const secHits    = detectSecurityContext(userTask + " " + lastAns);
+    const isSecurity = secHits.length >= 2; // 至少命中 2 个关键词才视为安全场景
+    const threshold  = isSecurity
+        ? cfg.reflection.securityThreshold
+        : cfg.reflection.qualityThreshold;
+
+    if (isSecurity) {
+        logger.info(EV.METAL,
+            `检测到安全场景（${secHits.slice(0, 4).join(", ")}），启用安全门槛 [${threshold}分]`
+        );
+    }
+
+    const reflectionPrompt = BASE_REFLECTION_PROMPT + (isSecurity ? SECURITY_HINT : "");
+
     let rule = null;
     let confidence = 0;
 
     try {
         const evaluation = await llm.invoke([
-            new SystemMessage(REFLECTION_PROMPT),
+            new SystemMessage(reflectionPrompt),
             new HumanMessage(lastAns),
         ]);
 
-        const parsed   = JSON.parse(evaluation.content.trim());
-        const score    = Number(parsed.score ?? 0);
-        const threshold = cfg.reflection.qualityThreshold;
+        const parsed = JSON.parse(evaluation.content.trim());
+        const score  = Number(parsed.score ?? 0);
 
         if (parsed.rule && score >= threshold) {
             rule       = parsed.rule;
             confidence = +(score / 100).toFixed(2);
+            const tag  = isSecurity ? "[安全准则]" : "";
             logger.info(EV.METAL,
-                `因果评审通过 [${score}分 ≥ ${threshold}] | 适用:${parsed.applicability} | 因果强度:${parsed.causal_strength}`
+                `因果评审通过 ${tag}[${score}分 ≥ ${threshold}] | 适用:${parsed.applicability} | 因果强度:${parsed.causal_strength}`
             );
         } else if (!parsed.rule) {
             logger.info(EV.METAL, "审计：无可提炼的通用准则，跳过入库。");

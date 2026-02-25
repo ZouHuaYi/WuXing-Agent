@@ -32,8 +32,9 @@
   },
 
   "reflection": {
-    "_comment":       "金节点质量门禁：score >= qualityThreshold 才入库",
-    "qualityThreshold": 72
+    "_comment":          "金节点质量门禁：通用准则 >= qualityThreshold；安全防御模式 >= securityThreshold（更易入库）",
+    "qualityThreshold":  72,
+    "securityThreshold": 52
   },
 
   "evolution": {
@@ -47,10 +48,10 @@
   },
 
   "tools": {
-    "_comment":           "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 沙箱超时",
+    "_comment":           "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 工作区超时",
     "maxCycles":          5,
     "executionTimeoutMs": 10000,
-    "sandboxDir":         "data/sandbox"
+    "workspaceDir":       "workspace"
   },
 
   "repl": {

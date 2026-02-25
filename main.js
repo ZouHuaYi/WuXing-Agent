@@ -16,6 +16,9 @@ import { WisdomMemory } from "./src/engine/vectorStore.js";
 import { logger, EV } from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
+import { readdir, unlink, mkdir } from "fs/promises";
+import { join } from "path";
+import { WORKSPACE_DIR } from "./src/engine/toolBox.js";
 
 const DIVIDER        = "-".repeat(56);
 const DOUBLE_DIVIDER = "=".repeat(56);
@@ -58,18 +61,34 @@ async function initSystem() {
     console.log("  状态：感知中...  |  模式：实时生命循环");
     console.log(DOUBLE_DIVIDER);
     console.log("  指令表：");
-    console.log("    :v [路径]  - 取象（视觉分析图片）");
-    console.log("    :d [主题]  - 论道（双智能体对抗辩论）");
-    console.log("    :e         - 进化（强制梦境折叠 + 熵减）");
-    console.log("    :m         - 状态（查看当前因果律内丹）");
-    console.log("    :c         - 清除当前会话上下文");
-    console.log("    exit       - 安全退出并保存记忆");
+    console.log("    :v [路径]      - 取象（视觉分析图片）");
+    console.log("    :d [主题]      - 论道（双智能体对抗辩论）");
+    console.log("    :e             - 进化（强制梦境折叠 + 熵减）");
+    console.log("    :m             - 状态（查看当前因果律内丹）");
+    console.log("    :w             - 工作区（查看 Agent 产出文件）");
+    console.log("    :open          - 在资源管理器中打开 workspace/ 目录");
+    console.log("    :clean [后缀]  - 清理工作区（可按后缀筛选，如 :clean js）");
+    console.log("    :c             - 清除当前会话上下文");
+    console.log("    exit           - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
 
     await wisdomMemory.loadFromDisk();
     const count = wisdomMemory.getAllDocs().length;
     logger.info(EV.SYSTEM, `经验库就绪，积累 ${count} 条因果律`);
-    console.log(`\n[系统] 经验库就绪，当前积累 ${count} 条因果律\n`);
+    console.log(`\n[系统] 经验库就绪，当前积累 ${count} 条因果律`);
+
+    // 水-感知工作区：启动时一眼看清手头有什么代码产出
+    if (!existsSync(WORKSPACE_DIR)) {
+        await mkdir(WORKSPACE_DIR, { recursive: true });
+    }
+    const wsFiles = await listWorkspace();
+    if (wsFiles.length > 0) {
+        console.log(`[水-工作区] workspace/ 中发现 ${wsFiles.length} 个文件：${wsFiles.join(", ")}`);
+        logger.info(EV.WATER, `工作区感知：${wsFiles.join(", ")}`);
+    } else {
+        console.log("[水-工作区] workspace/ 为空，等待 Agent 产出");
+    }
+    console.log();
 
     // 后台梦境定时器（水生木：时间滋养进化）
     const intervalMs = cfg.repl.dreamIntervalMs;
@@ -126,6 +145,20 @@ async function handleChat(input) {
 }
 
 // ─────────────────────────────────────────────
+// 工作区辅助
+// ─────────────────────────────────────────────
+
+async function listWorkspace() {
+    try {
+        if (!existsSync(WORKSPACE_DIR)) return [];
+        const entries = await readdir(WORKSPACE_DIR, { withFileTypes: true });
+        return entries.filter((e) => e.isFile()).map((e) => e.name);
+    } catch {
+        return [];
+    }
+}
+
+// ─────────────────────────────────────────────
 // 指令处理器
 // ─────────────────────────────────────────────
 
@@ -174,6 +207,56 @@ async function handleEvolution() {
     } catch (e) {
         console.error(`\n[错误] 进化失败: ${e.message}\n`);
     }
+}
+
+async function showWorkspaceStatus() {
+    const files = await listWorkspace();
+    console.log(`\n${DIVIDER}`);
+    console.log(`[工作区] workspace/ 共 ${files.length} 个文件`);
+    if (files.length === 0) {
+        console.log("  （暂无产出，可直接输入编程需求让 Agent 生成代码）");
+    } else {
+        files.forEach((f, i) => console.log(`  ${i + 1}. ${f}`));
+    }
+    console.log(`${DIVIDER}\n`);
+}
+
+async function openWorkspaceFolder() {
+    // Windows: explorer，macOS: open，Linux: xdg-open
+    const cmds   = { win32: "explorer", darwin: "open", linux: "xdg-open" };
+    const opener = cmds[process.platform] ?? "xdg-open";
+    const { exec } = await import("child_process");
+
+    if (!existsSync(WORKSPACE_DIR)) {
+        await mkdir(WORKSPACE_DIR, { recursive: true });
+    }
+    exec(`${opener} "${WORKSPACE_DIR}"`);
+    console.log(`\n[系统] 已打开工作区：${WORKSPACE_DIR}\n`);
+}
+
+async function handleCleanWorkspace(pattern) {
+    const files = await listWorkspace();
+    if (files.length === 0) {
+        console.log("\n[清理] 工作区已经是空的\n");
+        return;
+    }
+
+    // 支持按后缀筛选：:clean js  只删除 .js 文件
+    const targets = pattern
+        ? files.filter((f) => f.endsWith(`.${pattern}`) || f.includes(pattern))
+        : files;
+
+    if (targets.length === 0) {
+        console.log(`\n[清理] 未找到匹配 "${pattern}" 的文件\n`);
+        return;
+    }
+
+    console.log(`\n[清理] 即将删除 ${targets.length} 个文件：${targets.join(", ")}`);
+    for (const f of targets) {
+        await unlink(join(WORKSPACE_DIR, f));
+    }
+    logger.info(EV.SYSTEM, `工作区清理：删除 ${targets.join(", ")}`);
+    console.log(`[清理] 完成，workspace/ 已清洁\n`);
 }
 
 function showMemoryStatus() {
@@ -231,12 +314,15 @@ rl.on("line", async (line) => {
     const arg = input.slice(cmd.length).trim();
 
     switch (cmd) {
-        case ":v":  await handleVision(arg);                 break;
-        case ":d":  await handleDebate(arg);                 break;
-        case ":e":  await handleEvolution();                 break;
-        case ":m":  showMemoryStatus();                      break;
-        case ":c":  clearSession();                          break;
-        default:    await handleChat(input);                 break;
+        case ":v":     await handleVision(arg);              break;
+        case ":d":     await handleDebate(arg);              break;
+        case ":e":     await handleEvolution();              break;
+        case ":m":     showMemoryStatus();                   break;
+        case ":c":     clearSession();                       break;
+        case ":w":     await showWorkspaceStatus();          break;
+        case ":clean": await handleCleanWorkspace(arg);      break;
+        case ":open":  openWorkspaceFolder();                break;
+        default:       await handleChat(input);              break;
     }
 
     rl.prompt();
