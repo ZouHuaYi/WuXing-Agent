@@ -6,6 +6,8 @@ import { HumanMessage } from "@langchain/core/messages";
 import { app, wisdomMemory } from "./src/engine/wuxingGraph.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
+import { WuxingDebate } from "./src/engine/debate.js";
+import { WisdomMemory } from "./src/engine/vectorStore.js";
 import { logger, EV } from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
@@ -121,6 +123,27 @@ async function phaseThree() {
     }
 }
 
+// ─── 阶段四：双智能体论道（乾×坤）──────────────────────
+async function phaseFour() {
+    console.log(`\n${DOUBLE_DIVIDER}`);
+    console.log("【阶段四】乾×坤 双智能体论道");
+    console.log("  激进改革者 vs 稳健守护者 → 天道裁判合道");
+    console.log(DOUBLE_DIVIDER);
+    logger.info(EV.SYSTEM, "阶段四：双智能体论道启动");
+
+    // 乾：共享主 Agent 的记忆库（火属性，激进）
+    // 坤：独立记忆库（金属性，稳健）—— 演示内丹交换
+    const memoryKun = new WisdomMemory();
+    await memoryKun.loadFromDisk(); // 初始也从磁盘恢复，模拟独立进化个体
+
+    const debate = new WuxingDebate(wisdomMemory, memoryKun);
+
+    const debateTopic = "我们团队面临一个高风险的技术重构决策：" +
+        "现有系统稳定但技术债严重，全量重写风险大但长期收益高。应如何决策？";
+
+    await debate.startDiscourse(debateTopic);
+}
+
 // ─── 主入口 ──────────────────────────────────────────────
 async function runSystem() {
     // 初始化进化日志（写入 logs/evolution.log）
@@ -143,6 +166,7 @@ async function runSystem() {
     await phaseOne(evolution);
     await phaseTwo(evolution);
     await phaseThree();
+    await phaseFour();
 
     // 最终进化报告
     const finalDocs = wisdomMemory.getAllDocs();
@@ -158,6 +182,10 @@ async function runSystem() {
             console.log(`  ${i + 1}. [${age}] ${d.result}`);
         });
     }
+    // 认知对齐：淘汰低置信度糟粕
+    const removed = await wisdomMemory.refreshConfidence();
+    if (removed > 0) logger.info(EV.SYSTEM, `认知对齐完成，淘汰 ${removed} 条低质记忆`);
+
     logger.info(EV.SYSTEM, `本轮进化完毕，经验库 ${initialCount} → ${finalDocs.length} 条`);
     console.log(DOUBLE_DIVIDER);
     console.log(`\n[日志] 进化记录已写入 ${cfg.evolution.logFile}`);

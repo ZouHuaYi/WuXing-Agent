@@ -86,7 +86,24 @@ export class DreamModule {
 
                 const synthesis = res.content.trim();
                 if (synthesis !== "【无法合并】") {
-                    logger.evolution(EV.DREAM, `折叠成功：\n  A: "${docs[i].result}"\n  B: "${docs[j].result}"\n  => "${synthesis}"`);
+                    // 反向验证：新准则能否仍然有效覆盖原两个场景（防止过度泛化）
+                    const backCheck = await llm.invoke([
+                        new SystemMessage(
+                            "判断以下通用准则是否仍能有效指导两个原始场景（即：用该准则处理这两个场景，结论不会偏差太大）。" +
+                            "只回复'有效'或'过度泛化'，不要其他文字。"
+                        ),
+                        new HumanMessage(
+                            `准则：${synthesis}\n场景A任务：${docs[i].task}\n场景B任务：${docs[j].task}`
+                        ),
+                    ]);
+
+                    if (backCheck.content.trim().includes("过度泛化")) {
+                        logger.info(EV.DREAM, `反向验证失败，撤回合并（过度泛化）：${synthesis.slice(0, 40)}...`);
+                        // 不合并，继续尝试 i 与其他 j 的组合
+                        continue;
+                    }
+
+                    logger.evolution(EV.DREAM, `折叠通过反向验证：\n  A: "${docs[i].result}"\n  B: "${docs[j].result}"\n  => "${synthesis}"`);
                     result.push({ task: "合并场景", result: synthesis, createdAt: Date.now(), confidence: 1.0 });
                     used.add(i);
                     used.add(j);

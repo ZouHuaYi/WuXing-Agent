@@ -93,39 +93,53 @@ export class WisdomMemory {
     }
 
     /**
-     * 火：直觉联想（带大运流年的加权匹配）
+     * 火：直觉联想 —— 三因子加权召回（阴阳平衡公式）
      *
-     * 综合因果得分 = 语义相似度 × 置信度 × 时间衰减权重
-     * 时间衰减：exp(-lambda × 已过小时数)
-     * 新鲜的经验全权重，陈旧的经验自动淡化
+     * Score = Similarity × w_sim  +  TimeDecay × w_time  +  Confidence × w_conf
+     *
+     * 相似度（阳）：语义距离
+     * 时效（流年）：exp(-λ × 已过小时数)，新鲜经验权重高
+     * 置信（道行）：金节点评分 + 命中次数积累
+     * → 老马识途不被误删，短期偏见也不会主导
      */
     async recall(input) {
         if (this.vectors.length === 0) return null;
 
         const queryEmbedding = await this.embeddings.embedQuery(input);
         const now = Date.now();
+        const { similarityWeight, timeDecayWeight, confidenceWeight, recallThreshold } = cfg.scoring;
 
         let bestScore = 0;
-        let bestResult = null;
+        let bestIdx   = -1;
 
-        for (const v of this.vectors) {
+        for (let i = 0; i < this.vectors.length; i++) {
+            const v = this.vectors[i];
             const similarity = cosineSimilarity(queryEmbedding, v.embedding);
-            if (similarity < cfg.memory.semanticPreFilter) continue; // 语义预筛选
+            if (similarity < cfg.memory.semanticPreFilter) continue;
 
-            const { result, createdAt, confidence } = v.metadata;
+            const { createdAt, confidence } = v.metadata;
             const hoursPassed = (now - createdAt) / (1000 * 60 * 60);
-            const timeWeight = Math.exp(-this.lambda * hoursPassed);
-            const finalScore = similarity * confidence * timeWeight;
+            const timeDecay   = Math.exp(-this.lambda * hoursPassed);
 
-            if (finalScore > bestScore) {
-                bestScore = finalScore;
-                bestResult = result;
+            const score =
+                similarity  * similarityWeight +
+                timeDecay   * timeDecayWeight  +
+                confidence  * confidenceWeight;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx   = i;
             }
         }
 
-        if (bestScore > cfg.memory.recallThreshold) {
-            logger.info(EV.FIRE, `综合因果得分 ${bestScore.toFixed(3)}（语义×置信×流年），命中经验库`);
-            return bestResult;
+        if (bestScore >= recallThreshold) {
+            const hit = this.vectors[bestIdx];
+            logger.info(EV.FIRE,
+                `三因子得分 ${bestScore.toFixed(3)} ≥ ${recallThreshold}，命中经验库`
+            );
+            // 命中奖励：hitCount +1，置信度微强化（老马识途）
+            await this._reinforce(bestIdx);
+            return hit.metadata.result;
         }
         return null;
     }
@@ -135,20 +149,45 @@ export class WisdomMemory {
         const embedding = await this.embeddings.embedQuery(task);
         const createdAt = Date.now();
 
-        this.vectors.push({ content: task, embedding, metadata: { result, createdAt, confidence } });
-        this.rawDocs.push({ task, result, createdAt, confidence });
+        this.vectors.push({
+            content: task, embedding,
+            metadata: { result, createdAt, confidence, hitCount: 0 },
+        });
+        this.rawDocs.push({ task, result, createdAt, confidence, hitCount: 0 });
         logger.evolution(EV.WOOD, `因果律已固化（库存 ${this.rawDocs.length} 条）：${result}`);
         await this.saveToDisk();
     }
 
-    // 提升某条记忆的置信度（被再次命中时强化）
-    async reinforce(task) {
-        const idx = this.rawDocs.findIndex((d) => d.task === task);
-        if (idx !== -1) {
-            this.rawDocs[idx].confidence = Math.min(1.0, (this.rawDocs[idx].confidence ?? 1.0) + 0.1);
-            this.vectors[idx].metadata.confidence = this.rawDocs[idx].confidence;
-            await this.saveToDisk();
+    // 内部：命中强化（增加 hitCount，微调置信度）
+    async _reinforce(idx) {
+        if (idx < 0 || idx >= this.rawDocs.length) return;
+        const doc = this.rawDocs[idx];
+        doc.hitCount = (doc.hitCount ?? 0) + 1;
+        // 每命中10次，置信度 +0.05（上限 1.0）
+        if (doc.hitCount % 10 === 0) {
+            doc.confidence = Math.min(1.0, (doc.confidence ?? 1.0) + 0.05);
+            this.vectors[idx].metadata.confidence = doc.confidence;
+            logger.info(EV.WOOD, `经验强化：命中 ${doc.hitCount} 次，置信度升至 ${doc.confidence.toFixed(2)}`);
         }
+        this.vectors[idx].metadata.hitCount = doc.hitCount;
+        await this.saveToDisk();
+    }
+
+    /**
+     * 认知对齐（定期调用）：
+     * - 淘汰置信度 < minConfidence 的糟粕记忆
+     * - 返回淘汰数量
+     */
+    async refreshConfidence() {
+        const before = this.rawDocs.length;
+        const { minConfidence } = cfg.scoring;
+        const survivors = this.rawDocs.filter((d) => (d.confidence ?? 1.0) >= minConfidence);
+        const removed = before - survivors.length;
+        if (removed > 0) {
+            logger.evolution(EV.WOOD, `认知对齐：淘汰 ${removed} 条低置信记忆（< ${minConfidence}），剩余 ${survivors.length} 条`);
+            await this.replaceAll(survivors);
+        }
+        return removed;
     }
 
     getAllDocs() {

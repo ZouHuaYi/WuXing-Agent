@@ -17,15 +17,32 @@
 
   "memory": {
     "lambda":              0.005,
-    "recallThreshold":     0.70,
-    "semanticPreFilter":   0.70,
+    "semanticPreFilter":   0.65,
     "entropyTriggerEvery": 10,
     "dreamMinDocs":        4
+  },
+
+  "scoring": {
+    "_comment":         "三因子加权：相似度(阳) + 时效(流年) + 置信(道行)，权重之和应为1",
+    "similarityWeight": 0.5,
+    "timeDecayWeight":  0.2,
+    "confidenceWeight": 0.3,
+    "recallThreshold":  0.55,
+    "minConfidence":    0.10
+  },
+
+  "reflection": {
+    "_comment":       "金节点质量门禁：score >= qualityThreshold 才入库",
+    "qualityThreshold": 72
   },
 
   "evolution": {
     "dreamTriggerEvery":   3,
     "pairwiseMaxDocs":     8,
     "logFile":             "logs/evolution.log"
+  },
+
+  "debate": {
+    "synthesisMaxWords": 100
   }
 }
