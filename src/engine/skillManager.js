@@ -1,11 +1,11 @@
 // src/engine/skillManager.js
 // 【木-技能库】：热插拔技能管理器
 //
-// 架构：木生火 —— 知识（JSON+JS技能卡）直接转化为可执行工具（fire node）
+// 架构：木生火 —— 知识（JSON+JS技能卡 / SKILLS.md）直接转化为可执行工具（fire node）
 //
-// 目录约定：
-//   skills/my_skill.json  —— 元数据（name / description / parameters JSON Schema）
-//   skills/my_skill.js    —— 处理函数（ESM，export async function handler(args){}）
+// 来源优先级（同名时后者覆盖前者）：
+//   1. skills/*.json + skills/*.js      —— 独立配对文件
+//   2. skills/SKILLS.md 中的 JSON 块    —— MCP / Claude Code 生态兼容格式
 //
 // 热加载：每次 refreshSkills() 使用带时间戳的 file:// URL，绕过 ESM 模块缓存
 import { tool } from "@langchain/core/tools";
@@ -14,6 +14,8 @@ import { readFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { ALL_TOOLS, PROJECT_ROOT } from "./toolBox.js";
+import { parseSkillsMarkdown } from "./markdownLoader.js";
+import { validateSkillConfig, normalizeSkillConfig } from "../utils/schemaValidator.js";
 import { logger, EV } from "../utils/logger.js";
 
 export const SKILLS_DIR = join(PROJECT_ROOT, "skills");
@@ -79,22 +81,65 @@ export class SkillManager {
         this.dynamicTools.clear();
         this.failedSkills.clear();
 
+        // 阶段一：加载 skills/*.json + skills/*.js 配对
         const jsonFiles = readdirSync(this.skillsDir)
             .filter((f) => f.endsWith(".json"));
 
-        const results = await Promise.allSettled(
-            jsonFiles.map((f) => this.loadSkillPair(f))
-        );
+        await Promise.allSettled(jsonFiles.map((f) => this.loadSkillPair(f)));
 
-        const loaded  = this.dynamicTools.size;
-        const failed  = this.failedSkills.size;
+        // 阶段二：加载 skills/SKILLS.md
+        // 策略：
+        //   - 若 SKILLS.md 提供真实 handler（内联 / 文件） → 覆盖（以 SKILLS.md 为准）
+        //   - 若 SKILLS.md 只能给出 Stub，且该工具已由 JSON 配对加载 → 保留 JSON 版本
+        const mdPath = join(this.skillsDir, "SKILLS.md");
+        if (existsSync(mdPath)) {
+            const mdSkills = await parseSkillsMarkdown(mdPath, this.skillsDir);
+            for (const { config, handler, isStub } of mdSkills) {
+                if (isStub && this.dynamicTools.has(config.name)) {
+                    // JSON 配对已有真实实现，SKILLS.md 的 Stub 不应覆盖
+                    logger.info(EV.WOOD,
+                        `技能 ${config.name}：SKILLS.md 无独立实现，保留 JSON 来源 handler`
+                    );
+                } else {
+                    this._mountTool(config, handler, "SKILLS.md");
+                }
+            }
+        }
+
+        const loaded = this.dynamicTools.size;
+        const failed = this.failedSkills.size;
 
         logger.info(EV.WOOD,
-            `技能库刷新：加载 ${loaded} 个动态技能` +
-            (failed ? `，${failed} 个失败` : "")
+            `技能库刷新：共 ${loaded} 个动态技能` +
+            (failed ? `，${failed} 个加载失败` : "")
         );
 
         return { loaded, failed, tools: [...this.dynamicTools.keys()] };
+    }
+
+    // ── 挂载单个技能（配对 / SKILLS.md 共用逻辑）──────────────
+    _mountTool(config, handler, source = "JSON") {
+        const schema = config.parameters ? toZod(config.parameters) : z.object({}).passthrough();
+
+        const skillTool = tool(
+            async (args) => {
+                logger.info(EV.WOOD, `动态技能调用：${config.name} [来源：${source}]`);
+                try {
+                    const result = await handler(args);
+                    return String(result ?? "(无输出)");
+                } catch (e) {
+                    return `【技能执行错误】${config.name}: ${e.message}`;
+                }
+            },
+            {
+                name:        config.name,
+                description: config.description,
+                schema,
+            }
+        );
+
+        this.dynamicTools.set(config.name, skillTool);
+        logger.info(EV.WOOD, `技能已挂载：${config.name} [${source}]`);
     }
 
     // ── 加载单个技能卡（JSON + JS 配对）────────────────────
@@ -103,19 +148,21 @@ export class SkillManager {
         const jsonPath = join(this.skillsDir, jsonFile);
         const jsPath   = join(this.skillsDir, `${baseName}.js`);
 
-        // 解析元数据
-        let meta;
+        // 解析并验证元数据
+        let raw;
         try {
-            meta = JSON.parse(readFileSync(jsonPath, "utf-8"));
+            raw = JSON.parse(readFileSync(jsonPath, "utf-8"));
         } catch (e) {
             this._fail(baseName, `JSON 解析失败：${e.message}`);
             return;
         }
 
-        if (!meta.name || !meta.description) {
-            this._fail(baseName, "缺少必填字段：name / description");
+        const { valid, errors } = validateSkillConfig(raw);
+        if (!valid) {
+            this._fail(baseName, `Schema 不合规：${errors.join("；")}`);
             return;
         }
+        const meta = normalizeSkillConfig(raw);
 
         if (!existsSync(jsPath)) {
             this._fail(baseName, `找不到处理文件：${jsPath}`);
@@ -136,31 +183,7 @@ export class SkillManager {
             return;
         }
 
-        // 构建 Zod schema
-        const schema = meta.parameters
-            ? toZod(meta.parameters)
-            : z.object({}).passthrough();
-
-        // 包装为 LangChain tool
-        const skillTool = tool(
-            async (args) => {
-                logger.info(EV.WOOD, `动态技能调用：${meta.name}`);
-                try {
-                    const result = await handler(args);
-                    return String(result ?? "(无输出)");
-                } catch (e) {
-                    return `【技能执行错误】${meta.name}: ${e.message}`;
-                }
-            },
-            {
-                name:        meta.name,
-                description: meta.description,
-                schema,
-            }
-        );
-
-        this.dynamicTools.set(meta.name, skillTool);
-        logger.info(EV.WOOD, `技能已挂载：${meta.name}`);
+        this._mountTool(meta, handler, "JSON");
     }
 
     _fail(name, reason) {
