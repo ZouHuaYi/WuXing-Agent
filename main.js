@@ -1,6 +1,6 @@
 // main.js
-// WuXing-Agent v2.0 —— 象·数·理 三位一体
-// 新增：大运流年（时间衰减）| 梦境合并 | 多模态取象 | 集中配置 | 进化日志
+// WuXing-Agent v3.0 —— 象·数·理 三位一体 + 编程实战（Tool Calling）
+// 新增：火-工具执行层 | read_file | write_file | execute_code | list_dir
 import "dotenv/config";
 import { HumanMessage } from "@langchain/core/messages";
 import { app, wisdomMemory } from "./src/engine/wuxingGraph.js";
@@ -144,14 +144,53 @@ async function phaseFour() {
     await debate.startDiscourse(debateTopic);
 }
 
+// ─── 阶段五：编程实战（火-执行层）─────────────────────────
+async function phaseFive() {
+    console.log(`\n${DOUBLE_DIVIDER}`);
+    console.log("【阶段五】编程实战 —— 火-工具执行层启动");
+    console.log("  土（推理+工具决策）⇌ 火（执行）→ 金（因果审计）");
+    console.log(DOUBLE_DIVIDER);
+    logger.info(EV.SYSTEM, "阶段五：编程实战 Tool Calling 启动");
+
+    const cases = [
+        {
+            id: "skill-hardening",
+            label: "技能固化：创建并运行斐波那契函数",
+            question:
+                "请在沙箱中创建一个名为 fib.js 的文件，" +
+                "写一个递归斐波那契函数，计算 fib(10) 的值，并运行它。",
+        },
+        {
+            id: "context-awareness",
+            label: "上下文感知：分析项目依赖",
+            question:
+                "先列出项目根目录结构，再读取 package.json，" +
+                "分析当前依赖，指出潜在的版本风险或可优化点。",
+        },
+    ];
+
+    for (const c of cases) {
+        console.log(`\n${DIVIDER}`);
+        console.log(`[编程 Case] ${c.label}`);
+        console.log(`任务：${c.question}`);
+        console.log(DIVIDER);
+
+        const result = await app.invoke({ messages: [new HumanMessage(c.question)] });
+
+        const answer = result.foundWisdom ?? result.messages[result.messages.length - 1]?.content;
+        console.log(`\n[结果]\n${answer ?? "(无输出)"}`);
+        logger.info(EV.SYSTEM, `编程 Case [${c.id}] 完成`);
+    }
+}
+
 // ─── 主入口 ──────────────────────────────────────────────
 async function runSystem() {
     // 初始化进化日志（写入 logs/evolution.log）
     await logger.init(cfg.evolution.logFile);
 
     console.log(DOUBLE_DIVIDER);
-    console.log("  WuXing-Agent  五行智能体框架  v2.0");
-    console.log("  象·数·理 | 大运流年 | 梦境合并 | 多模态取象");
+    console.log("  WuXing-Agent  五行智能体框架  v3.0");
+    console.log("  象·数·理 | 大运流年 | 梦境合并 | 多模态取象 | 编程执行");
     console.log(DOUBLE_DIVIDER);
 
     // 木的延续：从磁盘恢复历次进化成果
@@ -167,6 +206,7 @@ async function runSystem() {
     await phaseTwo(evolution);
     await phaseThree();
     await phaseFour();
+    await phaseFive();
 
     // 最终进化报告
     const finalDocs = wisdomMemory.getAllDocs();

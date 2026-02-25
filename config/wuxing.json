@@ -44,5 +44,12 @@
 
   "debate": {
     "synthesisMaxWords": 100
+  },
+
+  "tools": {
+    "_comment":          "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 沙箱超时",
+    "maxCycles":         5,
+    "executionTimeoutMs": 10000,
+    "sandboxDir":        "data/sandbox"
   }
 }
