@@ -1,8 +1,13 @@
-// main.js
-// WuXing-Agent v3.0 —— 象·数·理 三位一体 + 编程实战（Tool Calling）
-// 新增：火-工具执行层 | read_file | write_file | execute_code | list_dir
+// main.js —— WuXing-Agent v3.0  交互进化版（REPL）
+//
+// 运行模式：永续感知循环
+//   - 多轮上下文：保留最近 N 轮对话，防止上下文爆炸
+//   - 异步进化：每 30 分钟后台梦境折叠，不阻塞对话
+//   - 指令系统：:v :d :e :m 按需触发特殊功能
+//
 import "dotenv/config";
-import { HumanMessage } from "@langchain/core/messages";
+import readline from "readline";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { app, wisdomMemory } from "./src/engine/wuxingGraph.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
@@ -12,226 +17,251 @@ import { logger, EV } from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
 
-const DIVIDER = "─".repeat(54);
-const DOUBLE_DIVIDER = "═".repeat(54);
+const DIVIDER        = "-".repeat(56);
+const DOUBLE_DIVIDER = "=".repeat(56);
 
-// ─── 阶段一：人情世故助手（五行主流程 + 进化插件）───────
-async function phaseOne(evolution) {
-    logger.info(EV.SYSTEM, "阶段一启动：五行主流程 —— 人情世故助手");
-    console.log("\n【阶段一】五行主流程 —— 人情世故助手");
-    console.log(DIVIDER);
+// ── 多轮会话上下文窗口 ────────────────────────────────────
+// 存储 [HumanMessage, AIMessage, HumanMessage, AIMessage ...]
+// 最多保留 cfg.repl.sessionWindowSize 条消息（含 Human + AI 双向）
+const sessionMessages = [];
 
-    const scenarios = [
-        {
-            round: 1,
-            label: "团队冲突（首次，土-逻辑推演）",
-            question: "我的团队成员之间发生了严重冲突，互相指责，项目快推进不下去了，我作为负责人该怎么办？",
-        },
-        {
-            round: 2,
-            label: "向上管理（新场景，土-逻辑推演）",
-            question: "我和领导的意见不一致，我觉得我的方案更好，但他坚持己见，应该如何处理而不影响关系？",
-        },
-        {
-            round: 3,
-            label: "团队内耗（相似场景，预期火-直觉命中）",
-            question: "团队又出现了内部争吵，这次因为分工不均，有人认为自己承担了更多工作，情绪激烈，怎么破局？",
-        },
-    ];
+function pushSession(humanMsg, aiMsg) {
+    sessionMessages.push(humanMsg);
+    if (aiMsg) sessionMessages.push(aiMsg);
 
-    for (const { round, label, question } of scenarios) {
-        console.log(`\n${DIVIDER}`);
-        console.log(`【第 ${round} 轮】${label}`);
-        console.log(`问题：${question}`);
-        console.log(DIVIDER);
-
-        const result = await app.invoke({ messages: [new HumanMessage(question)] });
-
-        const answer = result.foundWisdom ?? result.messages[result.messages.length - 1]?.content;
-        const source = result.foundWisdom ? "经验库直觉命中 ✦ 大运流年加权" : "逻辑推演 → 金反思提炼";
-        console.log(`\n[来源：${source}]`);
-        console.log(`\n${answer ?? "(无输出)"}`);
-
-        // 进化插件钩子：每轮任务完成后调用，插件自行决策是否触发进化
-        await evolution.afterTask();
+    // 滑动窗口：超出上限时从头删除最旧的一问一答
+    while (sessionMessages.length > cfg.repl.sessionWindowSize) {
+        sessionMessages.splice(0, 2);
     }
 }
 
-// ─── 阶段二：手动触发完整进化周期──────────────────────
-async function phaseTwo(evolution) {
-    console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【阶段二】完整进化周期 —— 熵减修剪 + 梦境折叠");
-    console.log(DOUBLE_DIVIDER);
-    logger.info(EV.SYSTEM, "阶段二：手动触发完整进化周期");
-    await evolution.fullCycle();
-}
+// ── 全局组件 ─────────────────────────────────────────────
+const vision   = new VisionModule();
+const evolution = new EvolutionPlugin(wisdomMemory);
 
-// ─── 阶段三：多模态视觉感知（取象比类）──────────────────
-async function phaseThree() {
-    console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【阶段三】多模态取象 —— 视觉信息投入五行推演");
-    console.log(DOUBLE_DIVIDER);
+// ── readline 接口 ─────────────────────────────────────────
+const rl = readline.createInterface({
+    input:  process.stdin,
+    output: process.stdout,
+    prompt: "WuXing > ",         // 避免 Windows 控制台 emoji 乱码
+    terminal: true,
+});
 
-    const vision = new VisionModule();
-
-    // 检查是否存在示例图片（用户自备，可以是架构图/监控截图等）
-    const sampleImages = [
-        "./data/sample.jpg",
-        "./data/sample.png",
-        "./data/architecture.jpg",
-        "./data/architecture.png",
-    ];
-    const availableImage = sampleImages.find(existsSync);
-
-    if (!availableImage) {
-        console.log("[水-视觉] 未找到示例图片（可将图片放至 data/ 目录，命名为 sample.jpg/png）");
-        console.log("[水-视觉] 演示：使用文本描述替代图像输入...\n");
-
-        // 用文本模拟取象结果（无需真实图片也能演示后续流程）
-        const simulatedVisionOutput =
-            "象：一个三层微服务架构图，包含6个服务节点，API网关连接前端，消息队列处于中心位置。" +
-            "数：节点数6，连接数9，扇出比约1.5，存在单点依赖（消息队列）。" +
-            "理：消息队列是系统瓶颈，一旦故障将导致级联崩溃。建议增加队列冗余或引入熔断机制。";
-
-        console.log(`[水-视觉 模拟] 取象结果：\n${simulatedVisionOutput}\n`);
-
-        console.log("[水-视觉 → 五行] 将视觉感知投入工作流推演...");
-        const result = await app.invoke({
-            messages: [new HumanMessage(`基于以下系统观察，给出最优处置方案：\n\n${simulatedVisionOutput}`)],
-        });
-
-        const answer = result.foundWisdom ?? result.messages[result.messages.length - 1]?.content;
-        console.log(`\n[五行推演结果]\n${answer}`);
-        return;
-    }
-
-    // 真实图片路径
-    try {
-        const imageDesc = await vision.captureImageLogic(availableImage);
-        console.log(`\n[象] 视觉解析结果：\n${imageDesc}\n`);
-
-        console.log("[水-视觉 → 五行] 将取象结果投入工作流推演...");
-        const result = await app.invoke({
-            messages: [new HumanMessage(`基于观察到的现象：\n\n${imageDesc}\n\n我们应该如何应对？`)],
-        });
-
-        const answer = result.foundWisdom ?? result.messages[result.messages.length - 1]?.content;
-        const source = result.foundWisdom ? "经验库直觉命中（视觉触发）" : "逻辑推演（视觉场景）";
-        console.log(`\n[来源：${source}]\n${answer}`);
-    } catch (e) {
-        console.warn(`[水-视觉] 取象失败: ${e.message}`);
-    }
-}
-
-// ─── 阶段四：双智能体论道（乾×坤）──────────────────────
-async function phaseFour() {
-    console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【阶段四】乾×坤 双智能体论道");
-    console.log("  激进改革者 vs 稳健守护者 → 天道裁判合道");
-    console.log(DOUBLE_DIVIDER);
-    logger.info(EV.SYSTEM, "阶段四：双智能体论道启动");
-
-    // 乾：共享主 Agent 的记忆库（火属性，激进）
-    // 坤：独立记忆库（金属性，稳健）—— 演示内丹交换
-    const memoryKun = new WisdomMemory();
-    await memoryKun.loadFromDisk(); // 初始也从磁盘恢复，模拟独立进化个体
-
-    const debate = new WuxingDebate(wisdomMemory, memoryKun);
-
-    const debateTopic = "我们团队面临一个高风险的技术重构决策：" +
-        "现有系统稳定但技术债严重，全量重写风险大但长期收益高。应如何决策？";
-
-    await debate.startDiscourse(debateTopic);
-}
-
-// ─── 阶段五：编程实战（火-执行层）─────────────────────────
-async function phaseFive() {
-    console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【阶段五】编程实战 —— 火-工具执行层启动");
-    console.log("  土（推理+工具决策）⇌ 火（执行）→ 金（因果审计）");
-    console.log(DOUBLE_DIVIDER);
-    logger.info(EV.SYSTEM, "阶段五：编程实战 Tool Calling 启动");
-
-    const cases = [
-        {
-            id: "skill-hardening",
-            label: "技能固化：创建并运行斐波那契函数",
-            question:
-                "请在沙箱中创建一个名为 fib.js 的文件，" +
-                "写一个递归斐波那契函数，计算 fib(10) 的值，并运行它。",
-        },
-        {
-            id: "context-awareness",
-            label: "上下文感知：分析项目依赖",
-            question:
-                "先列出项目根目录结构，再读取 package.json，" +
-                "分析当前依赖，指出潜在的版本风险或可优化点。",
-        },
-    ];
-
-    for (const c of cases) {
-        console.log(`\n${DIVIDER}`);
-        console.log(`[编程 Case] ${c.label}`);
-        console.log(`任务：${c.question}`);
-        console.log(DIVIDER);
-
-        const result = await app.invoke({ messages: [new HumanMessage(c.question)] });
-
-        const answer = result.foundWisdom ?? result.messages[result.messages.length - 1]?.content;
-        console.log(`\n[结果]\n${answer ?? "(无输出)"}`);
-        logger.info(EV.SYSTEM, `编程 Case [${c.id}] 完成`);
-    }
-}
-
-// ─── 主入口 ──────────────────────────────────────────────
-async function runSystem() {
-    // 初始化进化日志（写入 logs/evolution.log）
+// ─────────────────────────────────────────────
+// 启动：初始化 + 后台定时器
+// ─────────────────────────────────────────────
+async function initSystem() {
     await logger.init(cfg.evolution.logFile);
 
     console.log(DOUBLE_DIVIDER);
-    console.log("  WuXing-Agent  五行智能体框架  v3.0");
-    console.log("  象·数·理 | 大运流年 | 梦境合并 | 多模态取象 | 编程执行");
+    console.log("  WuXing-Agent v3.0  五行交互进化系统");
+    console.log("  状态：感知中...  |  模式：实时生命循环");
+    console.log(DOUBLE_DIVIDER);
+    console.log("  指令表：");
+    console.log("    :v [路径]  - 取象（视觉分析图片）");
+    console.log("    :d [主题]  - 论道（双智能体对抗辩论）");
+    console.log("    :e         - 进化（强制梦境折叠 + 熵减）");
+    console.log("    :m         - 状态（查看当前因果律内丹）");
+    console.log("    :c         - 清除当前会话上下文");
+    console.log("    exit       - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
 
-    // 木的延续：从磁盘恢复历次进化成果
     await wisdomMemory.loadFromDisk();
-    const initialCount = wisdomMemory.getAllDocs().length;
-    logger.info(EV.SYSTEM, `经验库就绪，积累 ${initialCount} 条因果律`);
-    console.log(`\n[系统] 经验库就绪，当前积累 ${initialCount} 条因果律`);
+    const count = wisdomMemory.getAllDocs().length;
+    logger.info(EV.SYSTEM, `经验库就绪，积累 ${count} 条因果律`);
+    console.log(`\n[系统] 经验库就绪，当前积累 ${count} 条因果律\n`);
 
-    // 创建进化插件（钩子式注入，不修改引擎核心）
-    const evolution = new EvolutionPlugin(wisdomMemory);
+    // 后台梦境定时器（水生木：时间滋养进化）
+    const intervalMs = cfg.repl.dreamIntervalMs;
+    setInterval(async () => {
+        logger.info(EV.SYSTEM, `后台梦境周期启动（每 ${intervalMs / 60000} 分钟）`);
+        await evolution.fullCycle();
+    }, intervalMs);
 
-    await phaseOne(evolution);
-    await phaseTwo(evolution);
-    await phaseThree();
-    await phaseFour();
-    await phaseFive();
+    logger.info(EV.SYSTEM, `后台梦境定时器已启动，周期 ${intervalMs / 60000} 分钟`);
+    console.log(`[系统] 后台进化定时器已启动（每 ${intervalMs / 60000} 分钟自动梦境折叠）\n`);
 
-    // 最终进化报告
-    const finalDocs = wisdomMemory.getAllDocs();
-    console.log(`\n${DOUBLE_DIVIDER}`);
-    console.log("【最终进化报告】");
-    console.log(`经验库：${initialCount} 条 → ${finalDocs.length} 条`);
-    if (finalDocs.length > 0) {
-        console.log("\n当前内化的因果律（含大运流年权重）：");
-        const now = Date.now();
-        finalDocs.forEach((d, i) => {
-            const hoursPassed = (now - (d.createdAt ?? now)) / (1000 * 60 * 60);
-            const age = hoursPassed < 1 ? "刚刚" : `${hoursPassed.toFixed(1)}h 前`;
-            console.log(`  ${i + 1}. [${age}] ${d.result}`);
-        });
-    }
-    // 认知对齐：淘汰低置信度糟粕
-    const removed = await wisdomMemory.refreshConfidence();
-    if (removed > 0) logger.info(EV.SYSTEM, `认知对齐完成，淘汰 ${removed} 条低质记忆`);
-
-    logger.info(EV.SYSTEM, `本轮进化完毕，经验库 ${initialCount} → ${finalDocs.length} 条`);
-    console.log(DOUBLE_DIVIDER);
-    console.log(`\n[日志] 进化记录已写入 ${cfg.evolution.logFile}`);
+    rl.prompt();
 }
 
-runSystem().catch((err) => {
+// ─────────────────────────────────────────────
+// 核心对话处理：五行推演 + 多轮上下文
+// ─────────────────────────────────────────────
+async function handleChat(input) {
+    const humanMsg = new HumanMessage(input);
+
+    // 将历史上下文 + 本次输入一并传入工作流
+    // 水/直觉节点取最后一条（当前问题），推理节点享有完整会话链
+    const contextMessages = [...sessionMessages, humanMsg];
+
+    console.log(`\n[感知] 正在进行五行推演... (上下文 ${sessionMessages.length} 条)\n`);
+
+    try {
+        const result = await app.invoke({ messages: contextMessages });
+
+        const answer = result.foundWisdom
+            ?? result.messages[result.messages.length - 1]?.content;
+        const source = result.foundWisdom
+            ? "[火] 直觉命中 — 经验库加权召回"
+            : "[土] 逻辑推演 — 实时生成";
+
+        console.log(DIVIDER);
+        console.log(source);
+        console.log(DIVIDER);
+        console.log(answer ?? "(无输出)");
+        console.log(`${DIVIDER}\n`);
+
+        // 更新会话窗口（将本轮存入上下文）
+        if (answer) {
+            pushSession(humanMsg, new AIMessage(answer));
+        }
+
+        // 异步微进化：不阻塞主循环，让用户立即看到提示符
+        setImmediate(() => evolution.afterTask());
+
+    } catch (err) {
+        logger.warn(EV.SYSTEM, `对话异常: ${err.message}`);
+        console.error(`\n[错误] 五行推演失败: ${err.message}\n`);
+    }
+}
+
+// ─────────────────────────────────────────────
+// 指令处理器
+// ─────────────────────────────────────────────
+
+async function handleVision(imgPath) {
+    const path = imgPath || "./data/sample.jpg";
+
+    if (!existsSync(path)) {
+        console.log(`\n[水-视觉] 未找到图片：${path}`);
+        console.log("[水-视觉] 请将图片放至 data/ 目录，或用 :v <路径> 指定完整路径\n");
+        return;
+    }
+
+    try {
+        console.log(`\n[水-视觉] 正在解析图片：${path}\n`);
+        const desc = await vision.captureImageLogic(path);
+        console.log(`[象] ${desc}\n`);
+
+        // 取象结果投入主流程推演
+        await handleChat(`基于以下视觉观察，给出分析与决策建议：\n\n${desc}`);
+    } catch (e) {
+        console.error(`\n[错误] 取象失败: ${e.message}\n`);
+    }
+}
+
+async function handleDebate(topic) {
+    const subject = topic || "如何平衡代码的开发速度与系统稳定性？";
+
+    console.log(`\n[论道] 乾 × 坤 双智能体启动`);
+    console.log(`[论道] 论题：${subject}\n`);
+
+    try {
+        const memoryKun = new WisdomMemory();
+        await memoryKun.loadFromDisk();
+        const debate = new WuxingDebate(wisdomMemory, memoryKun);
+        await debate.startDiscourse(subject);
+    } catch (e) {
+        console.error(`\n[错误] 论道失败: ${e.message}\n`);
+    }
+}
+
+async function handleEvolution() {
+    console.log("\n[金] 手动触发深度进化周期（梦境折叠 + 熵减修剪）...\n");
+    try {
+        await evolution.fullCycle();
+        console.log("\n[金] 进化完成\n");
+    } catch (e) {
+        console.error(`\n[错误] 进化失败: ${e.message}\n`);
+    }
+}
+
+function showMemoryStatus() {
+    const docs = wisdomMemory.getAllDocs();
+    const now  = Date.now();
+
+    console.log(`\n${DIVIDER}`);
+    console.log(`[内丹状态] 经验库共 ${docs.length} 条因果律`);
+    console.log(DIVIDER);
+
+    if (docs.length === 0) {
+        console.log("（暂无记忆，完成几轮对话后将自动积累）");
+    } else {
+        // 按置信度排序，展示最近 8 条
+        const sorted = [...docs].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+        sorted.slice(0, 8).forEach((d, i) => {
+            const age = ((now - (d.createdAt ?? now)) / 3600000).toFixed(1);
+            const conf = ((d.confidence ?? 0) * 100).toFixed(0);
+            const hits = d.hitCount ?? 0;
+            console.log(`  ${i + 1}. [道行 ${conf}% | ${age}h前 | 命中${hits}次]`);
+            console.log(`     ${d.result.slice(0, 72)}`);
+        });
+        if (docs.length > 8) {
+            console.log(`  ...（另有 ${docs.length - 8} 条）`);
+        }
+    }
+
+    console.log(`\n[当前会话] 上下文窗口：${sessionMessages.length}/${cfg.repl.sessionWindowSize} 条`);
+    console.log(`${DIVIDER}\n`);
+}
+
+function clearSession() {
+    sessionMessages.length = 0;
+    console.log("\n[系统] 会话上下文已清除，开始全新对话\n");
+}
+
+// ─────────────────────────────────────────────
+// readline 事件绑定：核心调度
+// ─────────────────────────────────────────────
+rl.on("line", async (line) => {
+    const input = line.trim();
+
+    if (!input) {
+        rl.prompt();
+        return;
+    }
+
+    if (input.toLowerCase() === "exit") {
+        rl.close();
+        return;
+    }
+
+    // 指令路由表
+    const cmd = input.split(" ")[0];
+    const arg = input.slice(cmd.length).trim();
+
+    switch (cmd) {
+        case ":v":  await handleVision(arg);                 break;
+        case ":d":  await handleDebate(arg);                 break;
+        case ":e":  await handleEvolution();                 break;
+        case ":m":  showMemoryStatus();                      break;
+        case ":c":  clearSession();                          break;
+        default:    await handleChat(input);                 break;
+    }
+
+    rl.prompt();
+});
+
+rl.on("close", async () => {
+    console.log("\n[系统] 正在固化内丹，保存记忆至磁盘...");
+
+    // 认知对齐：退出时淘汰低质记忆
+    const removed = await wisdomMemory.refreshConfidence();
+    if (removed > 0) {
+        console.log(`[系统] 认知对齐：淘汰 ${removed} 条低质记忆`);
+        logger.info(EV.SYSTEM, `退出时认知对齐，淘汰 ${removed} 条低质记忆`);
+    }
+
+    const finalCount = wisdomMemory.getAllDocs().length;
+    logger.info(EV.SYSTEM, `系统安全退出，经验库存量 ${finalCount} 条`);
+    console.log(`[系统] 安全退出，经验库存量 ${finalCount} 条\n`);
+    process.exit(0);
+});
+
+// ─────────────────────────────────────────────
+// 主入口
+// ─────────────────────────────────────────────
+initSystem().catch((err) => {
     console.error("[致命错误]", err.message);
     process.exit(1);
 });

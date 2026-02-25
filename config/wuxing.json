@@ -47,9 +47,15 @@
   },
 
   "tools": {
-    "_comment":          "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 沙箱超时",
-    "maxCycles":         5,
+    "_comment":           "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 沙箱超时",
+    "maxCycles":          5,
     "executionTimeoutMs": 10000,
-    "sandboxDir":        "data/sandbox"
+    "sandboxDir":         "data/sandbox"
+  },
+
+  "repl": {
+    "_comment":        "交互模式参数：dreamIntervalMs 后台梦境周期，sessionWindowSize 多轮上下文保留轮数",
+    "dreamIntervalMs":   1800000,
+    "sessionWindowSize": 6
   }
 }
