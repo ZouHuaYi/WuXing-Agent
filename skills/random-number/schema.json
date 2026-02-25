@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "min": {
+      "type": "integer",
+      "description": "最小值（含），默认 1"
+    },
+    "max": {
+      "type": "integer",
+      "description": "最大值（含），默认 100"
+    }
+  },
+  "required": []
+}

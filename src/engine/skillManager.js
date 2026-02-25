@@ -14,7 +14,7 @@ import { readFileSync, existsSync, readdirSync, mkdirSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { ALL_TOOLS, PROJECT_ROOT } from "./toolBox.js";
-import { parseSkillsMarkdown } from "./markdownLoader.js";
+import { loadAllDirectorySkills, legacyLoadFromMarkdown } from "./markdownLoader.js";
 import { validateSkillConfig, normalizeSkillConfig } from "../utils/schemaValidator.js";
 import { logger, EV } from "../utils/logger.js";
 
@@ -81,36 +81,34 @@ export class SkillManager {
         this.dynamicTools.clear();
         this.failedSkills.clear();
 
-        // 阶段一：加载 skills/*.json + skills/*.js 配对
-        const jsonFiles = readdirSync(this.skillsDir)
-            .filter((f) => f.endsWith(".json"));
-
+        // 阶段一（旧格式兼容）：skills/*.json + skills/*.js 平铺配对
+        const jsonFiles = readdirSync(this.skillsDir).filter((f) => f.endsWith(".json"));
         await Promise.allSettled(jsonFiles.map((f) => this.loadSkillPair(f)));
 
-        // 阶段二：加载 skills/SKILLS.md
-        // 策略：
-        //   - 若 SKILLS.md 提供真实 handler（内联 / 文件） → 覆盖（以 SKILLS.md 为准）
-        //   - 若 SKILLS.md 只能给出 Stub，且该工具已由 JSON 配对加载 → 保留 JSON 版本
-        const mdPath = join(this.skillsDir, "SKILLS.md");
-        if (existsSync(mdPath)) {
-            const mdSkills = await parseSkillsMarkdown(mdPath, this.skillsDir);
-            for (const { config, handler, isStub } of mdSkills) {
-                if (isStub && this.dynamicTools.has(config.name)) {
-                    // JSON 配对已有真实实现，SKILLS.md 的 Stub 不应覆盖
-                    logger.info(EV.WOOD,
-                        `技能 ${config.name}：SKILLS.md 无独立实现，保留 JSON 来源 handler`
-                    );
-                } else {
-                    this._mountTool(config, handler, "SKILLS.md");
-                }
+        // 阶段二（旧格式兼容）：skills/SKILLS.md 平铺 JSON 块
+        const legacyMd = join(this.skillsDir, "SKILLS.md");
+        if (existsSync(legacyMd)) {
+            const legacySkills = await legacyLoadFromMarkdown(legacyMd, this.skillsDir);
+            for (const { config, handler, isStub } of legacySkills) {
+                if (isStub && this.dynamicTools.has(config.name)) continue;
+                this._mountTool(config, handler, "SKILLS.md(legacy)");
             }
+        }
+
+        // 阶段三（新格式）：skills/{dir}/SKILL.md 目录型技能卡（同名时覆盖旧格式）
+        const dirSkills = await loadAllDirectorySkills(this.skillsDir);
+        for (const { config, handler, isStub } of dirSkills) {
+            if (isStub && this.dynamicTools.has(config.name)) {
+                logger.info(EV.WOOD, `技能 ${config.name}：目录型无 handler，保留已有版本`);
+                continue;
+            }
+            this._mountTool(config, handler, "SKILL.md");
         }
 
         const loaded = this.dynamicTools.size;
         const failed = this.failedSkills.size;
-
         logger.info(EV.WOOD,
-            `技能库刷新：共 ${loaded} 个动态技能` +
+            `技能库刷新完成：共 ${loaded} 个动态技能` +
             (failed ? `，${failed} 个加载失败` : "")
         );
 

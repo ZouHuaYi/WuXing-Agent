@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "detail": {
+      "type": "string",
+      "description": "查询维度：all / memory / platform / uptime，默认 all"
+    }
+  },
+  "required": []
+}

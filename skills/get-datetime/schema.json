@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "description": "输出格式：full / date / time / iso，默认 full"
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA 时区名，如 Asia/Shanghai，默认系统时区"
+    }
+  },
+  "required": []
+}
