@@ -199,10 +199,109 @@ export const listWorkspaceTool = tool(
     }
 );
 
+// ── 工具 6：测试运行器（写完即验，失败可自愈）────────────
+// 运行 workspace/ 中的代码文件，返回结构化报告：
+//   PASS — 含 stdout；FAIL — 含完整 stderr + stack + 修复建议索引
+export const testRunnerTool = tool(
+    async ({ filename, testCode, timeoutMs = 8000 }) => {
+        try {
+            await ensureWorkspace();
+            const safeFile   = basename(filename);
+            const targetPath = join(WORKSPACE_DIR, safeFile);
+
+            if (!existsSync(targetPath)) {
+                return `【测试失败】目标文件不存在：${targetPath}\n请先用 write_file 写入 ${safeFile}。`;
+            }
+
+            // 如果调用方提供了测试代码，写入临时测试文件后运行
+            // 否则直接运行目标文件（验证基本可执行性）
+            let runFile = targetPath;
+            let tempTest = null;
+
+            if (testCode) {
+                const testName = `__test_${safeFile}`;
+                tempTest = join(WORKSPACE_DIR, testName);
+                // 在测试代码头部注入 require 路径，确保能引用目标文件
+                const testContent =
+                    `// auto-generated test wrapper\n` +
+                    `process.chdir(${JSON.stringify(WORKSPACE_DIR)});\n` +
+                    testCode;
+                await writeFile(tempTest, testContent, "utf-8");
+                runFile = tempTest;
+            }
+
+            let result;
+            try {
+                result = await execFileAsync(
+                    process.execPath,
+                    [runFile],
+                    {
+                        timeout:   timeoutMs,
+                        cwd:       WORKSPACE_DIR,
+                        env:       { ...process.env },
+                        maxBuffer: 128 * 1024,
+                    }
+                );
+            } finally {
+                // 清理临时测试文件
+                if (tempTest && existsSync(tempTest)) {
+                    await unlink(tempTest).catch(() => {});
+                }
+            }
+
+            const stdout = result.stdout.slice(0, 3000).trim() || "(无输出)";
+            const stderr = result.stderr.slice(0, 500).trim();
+            const report = [
+                `【测试通过】${targetPath}`,
+                `输出：\n${stdout}`,
+                stderr ? `警告：\n${stderr}` : "",
+            ].filter(Boolean).join("\n");
+
+            return report;
+
+        } catch (e) {
+            // 结构化失败报告：区分超时 / 语法错误 / 运行时错误
+            const isTimeout = e.killed || e.code === "ETIMEDOUT";
+            const stderr    = (e.stderr ?? "").slice(0, 1500);
+            const stdout    = (e.stdout ?? "").slice(0, 500);
+
+            // 提取最关键的错误行（通常是第一行 Error: 或最后一行 at ...）
+            const errorLines = stderr.split("\n").filter(Boolean);
+            const errorHead  = errorLines.slice(0, 4).join("\n");
+            const stackHint  = errorLines.find((l) => l.trim().startsWith("at ")) ?? "";
+
+            const report = [
+                isTimeout
+                    ? `【测试超时】执行超过 ${timeoutMs}ms，可能存在死循环`
+                    : `【测试失败】${join(WORKSPACE_DIR, basename(filename))}`,
+                `错误摘要：\n${errorHead}`,
+                stackHint ? `定位：${stackHint.trim()}` : "",
+                stdout     ? `部分输出：\n${stdout}` : "",
+                "\n修复建议：根据以上错误信息，用 write_file 重写目标文件，再调用 test_runner 重新验证。",
+            ].filter(Boolean).join("\n");
+
+            return report;
+        }
+    },
+    {
+        name: "test_runner",
+        description:
+            "运行 workspace/ 中的代码文件并返回结构化测试报告（PASS/FAIL + 详细堆栈）。" +
+            "可选提供 testCode（字符串）作为独立测试脚本；不提供则直接运行目标文件。" +
+            "失败时报告包含修复建议，配合 write_file 形成自愈闭环。",
+        schema: z.object({
+            filename:  z.string().describe("要测试的文件名（workspace/ 中已有的文件）"),
+            testCode:  z.string().optional().describe("可选：独立的测试代码（会临时写入并运行，完成后自动删除）"),
+            timeoutMs: z.number().optional().describe("超时毫秒数（默认 8000）"),
+        }),
+    }
+);
+
 export const ALL_TOOLS = [
     readFileTool,
     listDirTool,
     writeFileTool,
     executeCodeTool,
     listWorkspaceTool,
+    testRunnerTool,
 ];

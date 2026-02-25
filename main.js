@@ -13,6 +13,7 @@ import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
 import { WisdomMemory } from "./src/engine/vectorStore.js";
+import { skillManager } from "./src/engine/skillManager.js";
 import { logger, EV } from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
@@ -65,9 +66,12 @@ async function initSystem() {
     console.log("    :d [主题]      - 论道（双智能体对抗辩论）");
     console.log("    :e             - 进化（强制梦境折叠 + 熵减）");
     console.log("    :m             - 状态（查看当前因果律内丹）");
-    console.log("    :w             - 工作区（查看 Agent 产出文件）");
+    console.log("    :w / :ls       - 工作区（查看 Agent 产出文件）");
     console.log("    :open          - 在资源管理器中打开 workspace/ 目录");
     console.log("    :clean [后缀]  - 清理工作区（可按后缀筛选，如 :clean js）");
+    console.log("    :skills        - 技能库（查看已挂载的全部工具）");
+    console.log("    :reload        - 热加载（重新扫描 skills/ 目录）");
+    console.log("");
     console.log("    :c             - 清除当前会话上下文");
     console.log("    exit           - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
@@ -87,6 +91,15 @@ async function initSystem() {
         logger.info(EV.WATER, `工作区感知：${wsFiles.join(", ")}`);
     } else {
         console.log("[水-工作区] workspace/ 为空，等待 Agent 产出");
+    }
+    console.log();
+
+    // 木-技能库初始化（扫描 skills/ 目录，热挂载动态技能）
+    const skillResult = await skillManager.refreshSkills();
+    if (skillResult.loaded > 0) {
+        console.log(`[木-技能] 动态技能已挂载：${skillResult.tools.join("、")}`);
+    } else {
+        console.log("[木-技能] skills/ 目录暂无技能，内置工具集就绪");
     }
     console.log();
 
@@ -221,6 +234,39 @@ async function showWorkspaceStatus() {
     console.log(`${DIVIDER}\n`);
 }
 
+async function handleReloadSkills() {
+    console.log("\n[木-技能] 正在重新扫描 skills/ 目录...");
+    const result = await skillManager.refreshSkills();
+    console.log(`[木-技能] 重载完成：${result.loaded} 个技能已挂载`);
+    if (result.tools.length > 0) {
+        console.log(`  动态技能：${result.tools.join("、")}`);
+    }
+    if (result.failed > 0) {
+        const st = skillManager.status();
+        for (const [name, reason] of Object.entries(st.failed)) {
+            console.log(`  [失败] ${name}：${reason}`);
+        }
+    }
+    console.log();
+}
+
+function showSkillStatus() {
+    const st = skillManager.status();
+    console.log(`\n${DIVIDER}`);
+    console.log(`[技能库] 共 ${st.total} 个工具（内置 ${st.builtin.length} + 动态 ${st.dynamic.length}）`);
+    console.log(`内置工具：${st.builtin.join("、")}`);
+    if (st.dynamic.length > 0) {
+        console.log(`动态技能：${st.dynamic.join("、")}`);
+    }
+    if (Object.keys(st.failed).length > 0) {
+        console.log(`加载失败：`);
+        for (const [name, reason] of Object.entries(st.failed)) {
+            console.log(`  ${name} — ${reason}`);
+        }
+    }
+    console.log(`${DIVIDER}\n`);
+}
+
 async function openWorkspaceFolder() {
     // Windows: explorer，macOS: open，Linux: xdg-open
     const cmds   = { win32: "explorer", darwin: "open", linux: "xdg-open" };
@@ -314,15 +360,18 @@ rl.on("line", async (line) => {
     const arg = input.slice(cmd.length).trim();
 
     switch (cmd) {
-        case ":v":     await handleVision(arg);              break;
-        case ":d":     await handleDebate(arg);              break;
-        case ":e":     await handleEvolution();              break;
-        case ":m":     showMemoryStatus();                   break;
-        case ":c":     clearSession();                       break;
-        case ":w":     await showWorkspaceStatus();          break;
-        case ":clean": await handleCleanWorkspace(arg);      break;
-        case ":open":  openWorkspaceFolder();                break;
-        default:       await handleChat(input);              break;
+        case ":v":       await handleVision(arg);            break;
+        case ":d":       await handleDebate(arg);            break;
+        case ":e":       await handleEvolution();            break;
+        case ":m":       showMemoryStatus();                 break;
+        case ":c":       clearSession();                     break;
+        case ":w":
+        case ":ls":      await showWorkspaceStatus();        break;
+        case ":clean":   await handleCleanWorkspace(arg);    break;
+        case ":open":    await openWorkspaceFolder();        break;
+        case ":reload":  await handleReloadSkills();         break;
+        case ":skills":  showSkillStatus();                  break;
+        default:         await handleChat(input);            break;
     }
 
     rl.prompt();

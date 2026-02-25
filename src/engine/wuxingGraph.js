@@ -11,7 +11,10 @@ import { ChatOpenAI } from "@langchain/openai";
 import { WisdomMemory } from "./vectorStore.js";
 import { sense } from "./waterSensor.js";
 import { prune } from "./entropyReducer.js";
-import { ALL_TOOLS } from "./toolBox.js";
+import { WORKSPACE_DIR } from "./toolBox.js";
+import { skillManager } from "./skillManager.js";
+import { readdir } from "fs/promises";
+import { existsSync } from "fs";
 import cfg from "../../config/wuxing.json" with { type: "json" };
 import { logger, EV } from "../utils/logger.js";
 
@@ -22,14 +25,11 @@ const llm = new ChatOpenAI({
     temperature: cfg.temperature.reasoning,
 });
 
-// 推理节点绑定全部编程工具（土生火：推理触发执行）
-const llmWithTools = new ChatOpenAI({
+// 推理用基础 LLM（不预绑工具，每次调用时动态绑定最新技能集）
+const llmBase = new ChatOpenAI({
     modelName:   cfg.models.reasoning,
     temperature: cfg.temperature.reasoning,
-}).bindTools(ALL_TOOLS);
-
-// 工具名 → 工具实例，执行时快速查找
-const TOOL_MAP = Object.fromEntries(ALL_TOOLS.map((t) => [t.name, t]));
+});
 
 export const wisdomMemory = new WisdomMemory();
 
@@ -84,15 +84,34 @@ async function intuitionNode(state) {
 //   若模型决定调用工具 → status = "tool_calling"
 //   否则直接得出答案  → status = "reflecting"
 // ─────────────────────────────────────────────
+// 扫描工作区文件，用于注入系统提示词（水生木：环境感知滋养推理）
+async function scanWorkspace() {
+    try {
+        if (!existsSync(WORKSPACE_DIR)) return [];
+        const entries = await readdir(WORKSPACE_DIR, { withFileTypes: true });
+        return entries.filter((e) => e.isFile()).map((e) => e.name);
+    } catch {
+        return [];
+    }
+}
+
 async function reasoningNode(state) {
     logger.info(EV.EARTH, "启动深层推理（含工具感知）...");
     const ctx = state.environmentContext;
 
+    // 工作区上下文注入：让 Agent 知道手头现有哪些文件，无需手动 list_workspace
+    const wsFiles = await scanWorkspace();
+    const wsContext = wsFiles.length > 0
+        ? `\n\n【工作区文件 workspace/】：${wsFiles.join("、")}\n` +
+          "可直接用文件名引用上述文件（read_file / execute_code / test_runner），无需重新创建。"
+        : "\n\n【工作区 workspace/ 当前为空】";
+
     let systemPrompt =
         "你是具备 MCP 权限的 WuXing 编程专家，可以调用工具来读写文件并执行代码。\n" +
-        "当你需要了解文件内容时，先用 list_dir 探路，再用 read_file 精读。\n" +
-        "当你要验证代码逻辑时，用 write_file 写入沙箱，再用 execute_code 运行。\n" +
-        "工具调用完成后，综合结果给出最终答案，并提炼因果准则。";
+        "工作流程：list_dir 探路 → read_file 精读 → write_file 写入 → test_runner 验证 → execute_code 运行。\n" +
+        "写完代码后，必须调用 test_runner 进行验证；若测试失败，根据错误报告修复代码，再次验证，形成自愈闭环。\n" +
+        "工具调用完成后，综合结果给出最终答案，并提炼因果准则。" +
+        wsContext;
 
     if (ctx?.urgency > 0.7) {
         systemPrompt += "\n用户情绪较为紧迫，请直接给出最核心的3条建议，每条不超过30字。";
@@ -102,7 +121,9 @@ async function reasoningNode(state) {
         systemPrompt += "\n用户感到受挫，避免说教，从理解其处境出发给出务实建议。";
     }
 
-    const res = await llmWithTools.invoke([
+    // 每次推理前动态绑定最新技能集（支持热加载后立即生效）
+    const currentTools = skillManager.getAllTools();
+    const res = await llmBase.bindTools(currentTools).invoke([
         new SystemMessage(systemPrompt),
         ...state.messages,
     ]);
@@ -134,9 +155,10 @@ async function fireToolNode(state) {
     console.log(`\n   [火-执行] 调用 ${calls.length} 个工具: ${calls.map((c) => c.name).join(", ")}`);
     logger.info(EV.FIRE, `工具执行：${calls.map((c) => `${c.name}(${JSON.stringify(c.args).slice(0, 60)})`).join(" | ")}`);
 
+    const toolMap = skillManager.getToolMap();  // 每次执行前取最新映射
     const results = await Promise.all(
         calls.map(async (call) => {
-            const toolFn = TOOL_MAP[call.name];
+            const toolFn = toolMap[call.name];
             if (!toolFn) {
                 return new ToolMessage({
                     content:      `【错误】未知工具：${call.name}`,
