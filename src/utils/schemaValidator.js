@@ -72,5 +72,11 @@ export function normalizeSkillConfig(config) {
         normalized.parameters = { type: "object", properties: {}, required: [] };
     }
 
+    // 保留 assigned_to（角色分配字段）
+    // 值可以是字符串（单角色）或数组（多角色）
+    if (normalized.assigned_to && typeof normalized.assigned_to === "string") {
+        normalized.assigned_to = normalized.assigned_to.trim() || null;
+    }
+
     return normalized;
 }

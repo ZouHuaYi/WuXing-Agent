@@ -15,6 +15,8 @@
     "@langchain/core": "^1.1.28",
     "@langchain/langgraph": "^1.1.5",
     "@langchain/openai": "^1.2.10",
-    "dotenv": "^16.4.7"
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "dotenv": "^16.4.7",
+    "zod": "^4.3.6"
   }
 }

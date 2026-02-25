@@ -14,7 +14,9 @@ import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
 import { WisdomMemory } from "./src/engine/vectorStore.js";
 import { skillManager } from "./src/engine/skillManager.js";
-import { logger, EV } from "./src/utils/logger.js";
+import { mcpPool }      from "./src/engine/mcpClient.js";
+import { runTeam }      from "./src/engine/orchestrator.js";
+import { logger, EV }   from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
 import { readdir, unlink, mkdir } from "fs/promises";
@@ -58,22 +60,27 @@ async function initSystem() {
     await logger.init(cfg.evolution.logFile);
 
     console.log(DOUBLE_DIVIDER);
-    console.log("  WuXing-Agent v3.0  五行交互进化系统");
+    console.log("  WuXing-Agent v3.1  五行交互进化系统 + MCP");
     console.log("  状态：感知中...  |  模式：实时生命循环");
     console.log(DOUBLE_DIVIDER);
     console.log("  指令表：");
-    console.log("    :v [路径]      - 取象（视觉分析图片）");
-    console.log("    :d [主题]      - 论道（双智能体对抗辩论）");
-    console.log("    :e             - 进化（强制梦境折叠 + 熵减）");
-    console.log("    :m             - 状态（查看当前因果律内丹）");
-    console.log("    :w / :ls       - 工作区（查看 Agent 产出文件）");
-    console.log("    :open          - 在资源管理器中打开 workspace/ 目录");
-    console.log("    :clean [后缀]  - 清理工作区（可按后缀筛选，如 :clean js）");
-    console.log("    :skills        - 技能库（查看已挂载的全部工具）");
-    console.log("    :reload        - 热加载（重新扫描 skills/ 目录）");
+    console.log("    :v [路径]             - 取象（视觉分析图片）");
+    console.log("    :d [主题]             - 论道（双智能体对抗辩论）");
+    console.log("    :e                    - 进化（强制梦境折叠 + 熵减）");
+    console.log("    :m                    - 状态（查看当前因果律内丹）");
+    console.log("    :w / :ls              - 工作区（查看 Agent 产出文件）");
+    console.log("    :open                 - 在资源管理器中打开 workspace/ 目录");
+    console.log("    :clean [后缀]         - 清理工作区（可按后缀筛选，如 :clean js）");
+    console.log("    :skills / :list       - 技能库（查看所有工具，含 MCP 来源）");
+    console.log("    :reload               - 热加载（重新扫描 skills/ + 刷新 MCP 工具）");
+    console.log("    :install <服务名> <命令> [参数...]");
+    console.log("                          - 安装 MCP 服务（写入 mcp.json 并即时连接）");
+    console.log("    :config               - 查看 MCP 服务连接状态");
     console.log("");
-    console.log("    :c             - 清除当前会话上下文");
-    console.log("    exit           - 安全退出并保存记忆");
+    console.log("    :team [任务]           - 团队模式（Commander 调度 Executor + Researcher 协作）");
+    console.log("");
+    console.log("    :c                    - 清除当前会话上下文");
+    console.log("    exit                  - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
 
     await wisdomMemory.loadFromDisk();
@@ -94,10 +101,30 @@ async function initSystem() {
     }
     console.log();
 
-    // 木-技能库初始化（扫描 skills/ 目录，热挂载动态技能）
+    // 水-MCP：连接 mcp.json 中已配置的外部服务
+    await mcpPool.connectAll();
+    const mcpStatus = mcpPool.getStatus();
+    const mcpNames  = Object.keys(mcpStatus);
+    if (mcpNames.length > 0) {
+        const summary = mcpNames.map((n) => {
+            const s = mcpStatus[n];
+            return s.status === "connected"
+                ? `${n}(${s.toolCount})`
+                : `${n}[${s.status}]`;
+        }).join("、");
+        console.log(`[水-MCP] 已连接服务：${summary}`);
+        logger.info(EV.WATER, `MCP 服务初始化：${summary}`);
+    }
+
+    // 木-技能库初始化（扫描 skills/ 目录 + 挂载 MCP 工具）
     const skillResult = await skillManager.refreshSkills();
-    if (skillResult.loaded > 0) {
-        console.log(`[木-技能] 动态技能已挂载：${skillResult.tools.join("、")}`);
+    const localCount  = skillResult.tools.length;
+    const mcpCount    = skillResult.mcpTools?.length ?? 0;
+    if (localCount > 0 || mcpCount > 0) {
+        const parts = [];
+        if (localCount > 0) parts.push(`本地 ${localCount} 个：${skillResult.tools.join("、")}`);
+        if (mcpCount   > 0) parts.push(`MCP ${mcpCount} 个：${skillResult.mcpTools.join("、")}`);
+        console.log(`[木-技能] 动态技能已挂载 — ${parts.join("  |  ")}`);
     } else {
         console.log("[木-技能] skills/ 目录暂无技能，内置工具集就绪");
     }
@@ -235,12 +262,15 @@ async function showWorkspaceStatus() {
 }
 
 async function handleReloadSkills() {
-    console.log("\n[木-技能] 正在重新扫描 skills/ 目录...");
+    console.log("\n[木-技能] 正在重新扫描 skills/ + 刷新 MCP 工具...");
+    // 重新连接 mcp.json 中尚未连接的服务（已连接的保持）
+    await mcpPool.connectAll();
     const result = await skillManager.refreshSkills();
-    console.log(`[木-技能] 重载完成：${result.loaded} 个技能已挂载`);
-    if (result.tools.length > 0) {
-        console.log(`  动态技能：${result.tools.join("、")}`);
-    }
+    const local  = result.tools?.length  ?? 0;
+    const mcp    = result.mcpTools?.length ?? 0;
+    console.log(`[木-技能] 重载完成：本地 ${local} 个，MCP ${mcp} 个（共 ${result.loaded} 个）`);
+    if (local > 0) console.log(`  本地技能：${result.tools.join("、")}`);
+    if (mcp   > 0) console.log(`  MCP 工具：${result.mcpTools.join("、")}`);
     if (result.failed > 0) {
         const st = skillManager.status();
         for (const [name, reason] of Object.entries(st.failed)) {
@@ -253,18 +283,144 @@ async function handleReloadSkills() {
 function showSkillStatus() {
     const st = skillManager.status();
     console.log(`\n${DIVIDER}`);
-    console.log(`[技能库] 共 ${st.total} 个工具（内置 ${st.builtin.length} + 动态 ${st.dynamic.length}）`);
-    console.log(`内置工具：${st.builtin.join("、")}`);
+    console.log(`[技能库] 共 ${st.total} 个工具`);
+    console.log(`  内置工具（${st.builtin.length}）：${st.builtin.join("、")}`);
     if (st.dynamic.length > 0) {
-        console.log(`动态技能：${st.dynamic.join("、")}`);
+        console.log(`  本地技能（${st.dynamic.length}）：${st.dynamic.join("、")}`);
+    }
+    if (st.mcp.length > 0) {
+        console.log(`  MCP 工具（${st.mcp.length}）：${st.mcp.join("、")}`);
+        // 显示每个 MCP 服务来源
+        for (const [srvName, srvSt] of Object.entries(st.mcpStatus)) {
+            if (srvSt.status === "connected") {
+                console.log(`    [${srvName}] ${srvSt.tools.join("、")}`);
+            }
+        }
     }
     if (Object.keys(st.failed).length > 0) {
-        console.log(`加载失败：`);
+        console.log(`  加载失败（${Object.keys(st.failed).length}）：`);
         for (const [name, reason] of Object.entries(st.failed)) {
-            console.log(`  ${name} — ${reason}`);
+            console.log(`    ${name} — ${reason}`);
         }
     }
     console.log(`${DIVIDER}\n`);
+}
+
+// ─────────────────────────────────────────────
+// MCP 指令处理器
+// ─────────────────────────────────────────────
+
+/**
+ * :install <serverName> <command> [arg1 arg2 ...]
+ * 示例：
+ *   :install everything npx -y @modelcontextprotocol/server-everything
+ *   :install my-server node C:/path/to/server.js
+ */
+async function handleMcpInstall(argStr) {
+    const parts      = argStr.trim().split(/\s+/);
+    const serverName = parts[0];
+    const command    = parts[1];
+    const args       = parts.slice(2);
+
+    if (!serverName || !command) {
+        console.log("\n[火-安装] 用法：:install <服务名> <命令> [参数...]");
+        console.log("  示例：:install everything npx -y @modelcontextprotocol/server-everything\n");
+        return;
+    }
+
+    console.log(`\n[火-安装] 正在安装 MCP 服务：${serverName}（${command} ${args.join(" ")}）`);
+    console.log("[火-安装] 尝试连接中（可能需要几秒钟）...\n");
+
+    const result = await mcpPool.installServer(serverName, { command, args });
+
+    if (result.success) {
+        console.log(`[火-安装] 成功！${serverName} 已连接，提供 ${result.toolCount} 个工具`);
+        // 刷新技能库让新工具立即生效
+        await skillManager.refreshSkills();
+        console.log(`[木-技能] 工具已热载入，可立即使用\n`);
+        logger.info(EV.WATER, `MCP 服务安装成功：${serverName}（${result.toolCount} 个工具）`);
+    } else {
+        console.log(`[火-安装] 连接失败：${result.error}`);
+        console.log(`[火-安装] 配置已写入 config/mcp.json，可稍后通过 :reload 重试\n`);
+    }
+}
+
+/**
+ * :config
+ * 显示 mcp.json 中所有服务的连接状态
+ */
+function showMcpConfig() {
+    const st     = mcpPool.getStatus();
+    const conf   = mcpPool.loadConfig();
+    const names  = Object.keys(conf);
+
+    console.log(`\n${DIVIDER}`);
+    console.log(`[土-配置] config/mcp.json — 共 ${names.length} 个 MCP 服务`);
+    console.log(DIVIDER);
+
+    if (names.length === 0) {
+        console.log("  （暂无配置，使用 :install 添加服务）");
+    } else {
+        for (const name of names) {
+            const cfg    = conf[name];
+            const status = st[name];
+            const icon   = status?.status === "connected" ? "✓" : status?.status === "failed" ? "✗" : "○";
+            const cmd    = `${cfg.command} ${(cfg.args ?? []).join(" ")}`;
+            console.log(`  ${icon} ${name}`);
+            console.log(`    命令：${cmd}`);
+            if (cfg.description) console.log(`    说明：${cfg.description}`);
+            if (status) {
+                if (status.status === "connected") {
+                    console.log(`    状态：已连接，${status.toolCount} 个工具（${status.tools.join("、")}）`);
+                } else if (status.status === "failed") {
+                    console.log(`    状态：连接失败 — ${status.error}`);
+                } else {
+                    console.log(`    状态：${status.status}`);
+                }
+            } else {
+                console.log("    状态：未尝试连接（重启或 :reload 触发）");
+            }
+        }
+    }
+    console.log(`${DIVIDER}\n`);
+}
+
+// ─────────────────────────────────────────────
+// 团队协作处理器
+// ─────────────────────────────────────────────
+
+/**
+ * :team [任务描述]
+ * 启动 Supervisor 多智能体模式
+ * Commander(土) 调度 Executor(火) 和 Researcher(水) 协作完成任务
+ */
+async function handleTeam(taskArg) {
+    const task = taskArg || "请帮我展示 workspace/ 目录下的文件列表，并分析各文件的用途";
+
+    const TEAM_DIVIDER = "═".repeat(56);
+    console.log(`\n${TEAM_DIVIDER}`);
+    console.log("  [土-团队] 多智能体协作模式启动");
+    console.log(`  任务：${task.slice(0, 60)}${task.length > 60 ? "…" : ""}`);
+    console.log(`${TEAM_DIVIDER}\n`);
+    logger.info(EV.EARTH, `团队任务启动：${task}`);
+
+    try {
+        const result = await runTeam(task);
+
+        console.log(`\n${TEAM_DIVIDER}`);
+        console.log("[土-Commander] 最终答案");
+        console.log(TEAM_DIVIDER);
+        console.log(result);
+        console.log(`${TEAM_DIVIDER}\n`);
+
+        // 优质答案也注入单智能体上下文（共享记忆）
+        pushSession(new HumanMessage(task), new AIMessage(result));
+        setImmediate(() => evolution.afterTask());
+
+    } catch (e) {
+        logger.warn(EV.SYSTEM, `团队任务失败：${e.message}`);
+        console.error(`\n[错误] 团队模式失败：${e.message}\n`);
+    }
 }
 
 async function openWorkspaceFolder() {
@@ -369,9 +525,13 @@ rl.on("line", async (line) => {
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;
         case ":open":    await openWorkspaceFolder();        break;
-        case ":reload":  await handleReloadSkills();         break;
-        case ":skills":  showSkillStatus();                  break;
-        default:         await handleChat(input);            break;
+        case ":reload":   await handleReloadSkills();          break;
+        case ":skills":
+        case ":list":     showSkillStatus();                  break;
+        case ":install":  await handleMcpInstall(arg);        break;
+        case ":config":   showMcpConfig();                    break;
+        case ":team":     await handleTeam(arg);              break;
+        default:          await handleChat(input);            break;
     }
 
     rl.prompt();
@@ -379,6 +539,9 @@ rl.on("line", async (line) => {
 
 rl.on("close", async () => {
     console.log("\n[系统] 正在固化内丹，保存记忆至磁盘...");
+
+    // 关闭所有 MCP 子进程（防止进程泄漏）
+    await mcpPool.disconnectAll();
 
     // 认知对齐：退出时淘汰低质记忆
     const removed = await wisdomMemory.refreshConfidence();

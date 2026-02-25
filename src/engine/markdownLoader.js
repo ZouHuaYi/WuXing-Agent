@@ -71,7 +71,12 @@ export async function loadDirectorySkill(dirPath) {
         }
     }
 
-    const rawConfig = { name: meta.name, description: meta.description, parameters };
+    const rawConfig = {
+        name:        meta.name,
+        description: meta.description,
+        parameters,
+        assigned_to: meta.assigned_to ?? meta["assigned-to"] ?? null,
+    };
 
     // ── 3. Schema 验证 ────────────────────────────────────────
     const { valid, errors } = validateSkillConfig(rawConfig);

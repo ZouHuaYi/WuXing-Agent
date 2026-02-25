@@ -1,0 +1,17 @@
+{
+  "name": "sql-injection-scanner",
+  "version": "1.0.0",
+  "description": "SQL Injection Scanner with multiple detection methods",
+  "main": "sql_scanner.js",
+  "scripts": {
+    "start": "node sql_scanner.js",
+    "test": "node test_scanner.js"
+  },
+  "keywords": ["sql", "injection", "security", "scanner"],
+  "author": "Security Scanner",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "commander": "^11.1.0"
+  }
+}

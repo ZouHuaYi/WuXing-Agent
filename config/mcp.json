@@ -1,0 +1,13 @@
+{
+  "_comment": "MCP 服务注册表 — 兼容 Cursor / Claude Desktop 标准配置格式",
+  "_docs": "每个 server 必须有 command + args；env 可选；description 供人类阅读",
+  "mcpServers": {
+    "everything": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ]
+    }
+  }
+}

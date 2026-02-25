@@ -1,0 +1,48 @@
+{
+  "_comment": "多智能体角色配置 — Supervisor 模式",
+  "maxIterations": 8,
+  "agents": {
+    "Commander": {
+      "element": "Earth",
+      "description": "中枢调度者：拆解任务、分配工作、汇总结果。不直接使用工具，通过 transfer 指令调度下属。",
+      "tool_categories": [],
+      "mcp_access": [],
+      "assigned_to_role": "Commander"
+    },
+    "Executor": {
+      "element": "Fire",
+      "description": "执行官：负责文件读写、代码执行、Shell 命令、系统操作。只接受有明确步骤的子任务。",
+      "tool_categories": ["file", "code", "shell"],
+      "mcp_access": ["windows-shell", "os-control", "browser-control"],
+      "assigned_to_role": "Executor"
+    },
+    "Researcher": {
+      "element": "Water",
+      "description": "情报员：负责读取文件、目录探索、联网搜索信息收集。只读，不写。",
+      "tool_categories": ["read"],
+      "mcp_access": ["web-search", "fetch"],
+      "assigned_to_role": "Researcher"
+    },
+    "Librarian": {
+      "element": "Wood",
+      "description": "知识官：管理技能库，查询经验内丹，向量检索。",
+      "tool_categories": ["knowledge"],
+      "mcp_access": [],
+      "assigned_to_role": "Librarian"
+    },
+    "Auditor": {
+      "element": "Metal",
+      "description": "安全审计：拦截危险命令，不参与执行，作为内联门卫嵌入 Commander 路由。",
+      "tool_categories": [],
+      "mcp_access": [],
+      "assigned_to_role": "Auditor"
+    }
+  },
+  "tool_category_map": {
+    "read":      ["read_file", "list_dir"],
+    "file":      ["read_file", "list_dir", "write_file", "list_workspace"],
+    "code":      ["execute_code", "test_runner"],
+    "shell":     [],
+    "knowledge": []
+  }
+}
