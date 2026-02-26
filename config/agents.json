@@ -13,16 +13,28 @@
   "externalAgents": {
     "_comment": "外部终端代理命令模板，{prompt} 会被替换为任务文本；protectedPathPatterns 命中时禁用自动审批",
     "protectedPathPatterns": [
-      "src/engine/evolve\\.js",
+      "src/engine/evolve\.js",
       "config/",
-      "\\.env"
+      "\.env"
     ],
     "codex": {
       "command": "codex",
-      "argsTemplate": ["{prompt}"]
+      "argsTemplate": [
+        "--disable", "elevated_windows_sandbox",
+        "--disable", "experimental_windows_sandbox",
+        "-c", "suppress_unstable_features_warning=true",
+        "exec", "--json", "-"
+      ],
+      "promptViaStdin": true,
+      "envStrip": ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"],
+      "env": {}
     },
     "claude": {
       "command": "claude",
+      "argsTemplate": ["{prompt}"]
+    },
+    "cursor-agent": {
+      "command": "cursor",
       "argsTemplate": ["{prompt}"]
     }
   },

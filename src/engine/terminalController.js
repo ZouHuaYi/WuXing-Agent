@@ -43,10 +43,38 @@ function buildAgentCommand(agentName, taskPrompt) {
     if (fromConfig?.command) {
         const argsTpl = Array.isArray(fromConfig.argsTemplate) ? fromConfig.argsTemplate : ["{prompt}"];
         const args = argsTpl.map((s) => String(s).replaceAll("{prompt}", taskPrompt));
-        return { command: fromConfig.command, args };
+        const stdinPrompt = fromConfig.promptViaStdin ? taskPrompt : null;
+        const extraEnv = (fromConfig.env && typeof fromConfig.env === "object") ? fromConfig.env : null;
+        const envStrip = Array.isArray(fromConfig.envStrip) ? fromConfig.envStrip : null;
+        return { command: fromConfig.command, args, stdinPrompt, extraEnv, envStrip, useShell: true };
     }
 
-    if (agentName === "codex") return { command: "codex", args: [taskPrompt] };
+    if (agentName === "codex") {
+        const codexArgs = [
+            "--disable", "elevated_windows_sandbox",
+            "--disable", "experimental_windows_sandbox",
+            "-c", "suppress_unstable_features_warning=true",
+            "exec", "--json", "-",
+        ];
+        if (process.platform === "win32") {
+            // Win11 下显式走 PowerShell，避免 shell:true 默认落到 cmd.exe 造成环境差异
+            const cmdline = `codex ${codexArgs.join(" ")}`;
+            return {
+                command: "powershell.exe",
+                args: ["-NoLogo", "-Command", cmdline],
+                stdinPrompt: taskPrompt,
+                envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"],
+                useShell: false,
+            };
+        }
+        return {
+            command: "codex",
+            args: codexArgs,
+            stdinPrompt: taskPrompt,
+            envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"],
+            useShell: false,
+        };
+    }
     if (agentName === "claude") return { command: "claude", args: [taskPrompt] };
     if (agentName === "cursor") return { command: "cursor-agent", args: [taskPrompt] };
     return null;
@@ -58,30 +86,43 @@ export class TerminalController extends EventEmitter {
         agentName,
         command,
         args,
+        stdinPrompt = null,
+        envStrip = null,
+        useShell = true,
         autoApprove = true,
         timeoutMs = DEFAULT_TTL_MS,
         cwd = process.cwd(),
         env = process.env,
+        extraEnv = null,
     }) {
         super();
         this.id = id;
         this.agentName = agentName;
         this.command = command;
         this.args = args;
+        this.stdinPrompt = stdinPrompt;
+        this.envStrip = Array.isArray(envStrip) ? envStrip : [];
+        this.useShell = useShell;
         this.autoApprove = autoApprove;
         this.timeoutMs = timeoutMs;
         this.cwd = cwd;
         this.env = env;
+        this.extraEnv = extraEnv;
         this.proc = null;
         this.timer = null;
         this.finished = false;
     }
 
     execute() {
+        const mergedEnv = { ...this.env, ...(this.extraEnv ?? {}) };
+        for (const k of this.envStrip) {
+            if (k in mergedEnv) delete mergedEnv[k];
+        }
+
         this.proc = spawn(this.command, this.args, {
-            shell: true,
+            shell: this.useShell,
             cwd: this.cwd,
-            env: { ...this.env },
+            env: mergedEnv,
             stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -95,6 +136,12 @@ export class TerminalController extends EventEmitter {
         this.timer = setTimeout(() => {
             this.stop("timeout");
         }, this.timeoutMs);
+
+        if (typeof this.stdinPrompt === "string" && this.stdinPrompt.length > 0) {
+            this.proc.stdin.write(this.stdinPrompt);
+            this.proc.stdin.write("\n");
+            this.proc.stdin.end();
+        }
 
         this.proc.stdout.on("data", (buf) => {
             const output = String(buf);
@@ -189,8 +236,12 @@ class TerminalTaskManager {
             taskPrompt,
             command: plan.command,
             args: plan.args,
+            stdinPrompt: plan.stdinPrompt ?? null,
             autoApprove,
             timeoutMs,
+            extraEnv: plan.extraEnv ?? null,
+            envStrip: plan.envStrip ?? null,
+            useShell: typeof plan.useShell === "boolean" ? plan.useShell : true,
             status: "running",
             startedAt,
             endedAt: null,
@@ -206,8 +257,12 @@ class TerminalTaskManager {
             agentName,
             command: plan.command,
             args: plan.args,
+            stdinPrompt: plan.stdinPrompt ?? null,
             autoApprove,
             timeoutMs,
+            extraEnv: plan.extraEnv ?? null,
+            envStrip: plan.envStrip ?? null,
+            useShell: typeof plan.useShell === "boolean" ? plan.useShell : true,
             cwd: process.cwd(),
         });
         task.controller = controller;
