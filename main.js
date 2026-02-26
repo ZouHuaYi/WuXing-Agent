@@ -12,6 +12,8 @@ import { app, wisdomMemory, vectorMemory, skillWriter } from "./src/engine/wuxin
 import { sessionManager } from "./src/engine/sessionManager.js";
 import { goalTracker }   from "./src/engine/goalTracker.js";
 import { statusBoard }   from "./src/engine/statusBoard.js";
+import { WuXingPulse }   from "./src/engine/pulse.js";
+import { geneticEvolver } from "./src/engine/evolve.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -96,7 +98,13 @@ async function initSystem() {
     console.log("    :status               - 刷新并查看自我状态看板（STATUS.md 摘要）");
     console.log("    :status resolve <词>  - 标记 STATUS.md 中某个缺陷已修复");
     console.log("    :goal <子指令>        - 长期目标管理（add/list/done/complete/briefing）");
+    console.log("    :pulse                - 查看五行心跳（自主代谢）状态");
+    console.log("    :pulse start/stop     - 启动/停止心跳调度器");
+    console.log("    :evolve               - 查看 Agent 提交的架构修改提案");
+    console.log("    :evolve apply         - 安全应用提案（含备份+语法检查+人类确认）");
+    console.log("    :evolve rollback      - 回滚核心图到上一个版本");
     console.log("    exit                  - 安全退出并保存记忆");
+    console.log("  自主模式：node main.js --autonomous  （心跳每60分钟自主执行任务）");
     console.log(DOUBLE_DIVIDER);
 
     await wisdomMemory.loadFromDisk();
@@ -167,6 +175,17 @@ async function initSystem() {
 
     logger.info(EV.SYSTEM, `后台梦境定时器已启动，周期 ${intervalMs / 60000} 分钟`);
     console.log(`[系统] 后台进化定时器已启动（每 ${intervalMs / 60000} 分钟自动梦境折叠）\n`);
+
+    // 木-震：自主模式（--autonomous 标志启动心跳）
+    if (process.argv.includes("--autonomous")) {
+        const pulse = new WuXingPulse(
+            (state, cfg) => app.invoke(state, cfg),
+            { intervalMs: 3_600_000 }   // 每小时一次，可通过 wuxing.json pulse.intervalMs 调整
+        );
+        pulse.start();
+        // 挂载到全局，供 :pulse 指令控制
+        global.__pulse = pulse;
+    }
 
     // 神-意志：启动晨报 — 展示活跃目标，给 Agent 一个持续的方向感
     const activeGoals = goalTracker.list("active");
@@ -637,6 +656,137 @@ function handleStatus(arg) {
     console.log(`\n[金-反射] STATUS.md 已更新（根目录可查看完整看板）\n`);
 }
 
+// ── :pulse 指令处理器 ────────────────────────────────────
+// 管理五行心跳（自主代谢模式）
+function handlePulse(arg) {
+    const sub = arg.trim();
+
+    if (!global.__pulse) {
+        // 非 --autonomous 启动时，按需创建 pulse 实例
+        if (sub === "start") {
+            const pulse = new WuXingPulse(
+                (state, cfg) => app.invoke(state, cfg),
+                { intervalMs: 3_600_000 }
+            );
+            pulse.start();
+            global.__pulse = pulse;
+            console.log("\n[木-震] 心跳已启动（手动模式，每 60 分钟）\n");
+            return;
+        }
+        console.log("\n[木-震] 心跳未运行。使用 :pulse start 启动，或以 --autonomous 标志运行。\n");
+        return;
+    }
+
+    const pulse = global.__pulse;
+
+    if (sub === "stop") {
+        pulse.stop();
+        global.__pulse = null;
+        console.log("\n[木-震] 心跳已停止\n");
+        return;
+    }
+
+    if (sub === "start") {
+        if (pulse.isRunning) {
+            console.log("\n[木-震] 心跳已在运行中\n");
+        } else {
+            pulse.start();
+        }
+        return;
+    }
+
+    // :pulse status（默认）
+    const s = pulse.status();
+    console.log([
+        "",
+        `[木-震] 五行心跳状态`,
+        `  运行中：${s.running ? "✅ 是" : "❌ 否"}`,
+        `  心跳间隔：${s.interval / 60000} 分钟`,
+        `  已跳动：${s.beats} 次`,
+        `  连续失败：${s.fails} 次`,
+        "",
+        `指令：:pulse start / :pulse stop`,
+        "",
+    ].join("\n"));
+}
+
+// ── :evolve 指令处理器 ────────────────────────────────────
+// 安全应用 Agent 在 workspace/proposed_graph.js 写下的架构提案
+async function handleEvolve(arg) {
+    const sub = (arg.trim().split(/\s+/)[0] ?? "").toLowerCase();
+
+    if (sub === "apply") {
+        // 最后一道人类确认门（readline）
+        const confirm = await new Promise((resolve) => {
+            rl.question(
+                "\n[金-警告] 即将修改核心文件 src/engine/wuxingGraph.js。确认操作？(yes/no) > ",
+                (ans) => resolve(ans.trim().toLowerCase())
+            );
+        });
+        if (confirm !== "yes" && confirm !== "y") {
+            console.log("\n[金-取消] 基因重组已取消\n");
+            return;
+        }
+
+        const result = geneticEvolver.apply();
+        console.log(`\n${result.message}\n`);
+        return;
+    }
+
+    if (sub === "rollback") {
+        const result = geneticEvolver.rollback();
+        console.log(`\n${result.message}\n`);
+        return;
+    }
+
+    if (sub === "backup") {
+        const dest = geneticEvolver.backup("manual");
+        console.log(`\n[金-备份] 已备份至：${dest}\n`);
+        return;
+    }
+
+    if (sub === "list") {
+        const files = geneticEvolver.listBackups();
+        if (files.length === 0) {
+            console.log("\n[金-备份] 暂无备份\n");
+        } else {
+            console.log("\n[金-备份] 最近备份：");
+            files.forEach((f, i) => console.log(`  ${i + 1}. ${f}`));
+            console.log();
+        }
+        return;
+    }
+
+    // 默认：review（查看提案）
+    const info = geneticEvolver.reviewProposal();
+    if (info.exists) {
+        console.log([
+            "",
+            `[木-进化] 架构提案预览（workspace/proposed_graph.js，${info.lines} 行）`,
+            "─".repeat(50),
+            info.preview,
+            "─".repeat(50),
+            "",
+            "运行 :evolve apply  → 应用提案（需确认）",
+            "运行 :evolve backup → 手动备份当前架构",
+            "运行 :evolve list   → 查看所有备份",
+            "",
+        ].join("\n"));
+    } else {
+        console.log([
+            "",
+            "[木-进化] 使用说明：",
+            "  1. 让 Agent 读取 src/engine/wuxingGraph.js",
+            "  2. Agent 在 workspace/proposed_graph.js 写出修改方案",
+            "  3. 运行 :evolve          → 预览提案",
+            "  4. 运行 :evolve apply    → 安全应用（含备份+语法检查+人类确认）",
+            "  5. 运行 :evolve rollback → 回滚到上一个版本",
+            "  6. 运行 :evolve list     → 查看备份历史",
+            "",
+        ].join("\n"));
+    }
+}
+
 // ── :vision 指令处理器 ───────────────────────────────────
 // 将一段自然语言愿景拆解为结构化目标 + 里程碑，写入 goals.json
 async function handleVision2(arg) {
@@ -802,6 +952,8 @@ rl.on("line", async (line) => {
         case ":goal":    await handleGoal(arg);             break;
         case ":vision":  await handleVision2(arg);          break;
         case ":status":  handleStatus(arg);                 break;
+        case ":pulse":   handlePulse(arg);                  break;
+        case ":evolve":  await handleEvolve(arg);           break;
         case ":w":
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;

@@ -1620,3 +1620,45 @@ C...
 [2026-02-26 05:33:35] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__execute-code [MCP:playwright-mcp]
 [2026-02-26 05:34:37] [INFO  ] [系统] [神-意志] 新目标种下：搭建基于机器学习的BTC短线波段模型并完成7天回测
 [2026-02-26 05:35:25] [INFO  ] [系统] [神-意志] 新目标种下：实现基于ML的BTC短线波段模型并完成7天回测
+
+────────────────────────────────────────────────────────────
+[2026-02-26 06:08:48] SESSION START
+────────────────────────────────────────────────────────────
+[2026-02-26 06:08:48] [INFO  ] [木-生长] 正在重建 3 条经验的向量索引...
+[2026-02-26 06:08:48] [INFO  ] [木-生长] 向量索引就绪（全部命中缓存，API 调用 0 次）
+[2026-02-26 06:08:48] [INFO  ] [木-生长] 从磁盘恢复 3 条因果律
+[2026-02-26 06:08:48] [INFO  ] [系统] 经验库就绪，积累 3 条因果律
+[2026-02-26 06:08:48] [INFO  ] [水-感知] MCP：尝试连接 3 个服务...
+[2026-02-26 06:08:50] [INFO  ] [水-感知] MCP 连接成功：playwright-mcp（5 个工具）
+[2026-02-26 06:08:54] [INFO  ] [水-感知] MCP 连接成功：tavily-search（2 个工具）
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 连接成功：everything（13 个工具）
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能 get_datetime：加载 scripts/index.js（JS）
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 服务初始化：everything(13)、tavily-search(2)、playwright-mcp(5)
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能 random_number：加载 scripts/index.js（JS）
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 目录型技能扫描完成：发现 3 个有效技能
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能 get_system_info：加载 scripts/index.js（JS）
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能已挂载：get_datetime [SKILL.md]
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能已挂载：get_system_info [SKILL.md]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__echo [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-annotated-message [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-resource-links [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-env [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-resource-reference [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能已挂载：random_number [SKILL.md]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-structured-content [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-sum [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__gzip-file-as-resource [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__toggle-simulated-logging [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__get-tiny-image [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__toggle-subscriber-updates [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__trigger-long-running-operation [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：everything__simulate-research-query [MCP:everything]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：tavily-search__tavily-extract [MCP:tavily-search]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：tavily-search__tavily-search [MCP:tavily-search]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__init-browser [MCP:playwright-mcp]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__get-screenshot [MCP:playwright-mcp]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__get-full-dom [MCP:playwright-mcp]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__execute-code [MCP:playwright-mcp]
+[2026-02-26 06:08:55] [INFO  ] [水-感知] MCP 工具已挂载：playwright-mcp__get-context [MCP:playwright-mcp]
+[2026-02-26 06:08:55] [INFO  ] [系统] 后台梦境定时器已启动，周期 30 分钟
+[2026-02-26 06:08:55] [INFO  ] [木-生长] 技能库刷新完成：本地 3 个，MCP 20 个

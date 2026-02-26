@@ -70,5 +70,17 @@
     "persistFile":       "data/sessions/current.json",
     "maxMessages":       40,
     "summaryKeepRecent": 10
+  },
+
+  "pulse": {
+    "_comment":          "五行心跳调度器（--autonomous 模式下自主代谢）",
+    "intervalMs":        3600000,
+    "maxTasksPerBeat":   1
+  },
+
+  "evolve": {
+    "_comment":          "基因重组器：架构备份目录和安全限制",
+    "backupDir":         "data/backups",
+    "maxBackups":        20
   }
 }
