@@ -7,6 +7,8 @@
 import "dotenv/config";
 import express         from "express";
 import cors            from "cors";
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
 import { readFileSync, existsSync, readdirSync, statSync, rmSync } from "fs";
 import { resolve, join } from "path";
 
@@ -19,6 +21,7 @@ import { statusBoard }    from "./src/engine/statusBoard.js";
 import { geneticEvolver } from "./src/engine/evolve.js";
 import { sessionManager } from "./src/engine/sessionManager.js";
 import { approvalManager } from "./src/engine/approvalManager.js";
+import { terminalTaskManager } from "./src/engine/terminalController.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import cfg from "./config/wuxing.json" with { type: "json" };
 
@@ -357,6 +360,46 @@ app.post("/api/v1/approvals/:id/decision", (req, res) => {
     res.json(r);
 });
 
+app.post("/api/v1/external-agent/start", (req, res) => {
+    try {
+        const { agentName, taskPrompt, autoApprove = true, timeoutMs = 600000 } = req.body ?? {};
+        if (!agentName?.trim()) return res.status(400).json({ error: "agentName 不能为空" });
+        if (!taskPrompt?.trim()) return res.status(400).json({ error: "taskPrompt 不能为空" });
+        const task = terminalTaskManager.startTask({
+            agentName: agentName.trim(),
+            taskPrompt: taskPrompt.trim(),
+            autoApprove: !!autoApprove,
+            timeoutMs: Math.max(5000, Math.min(3600000, Number(timeoutMs) || 600000)),
+        });
+        res.json({ task });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get("/api/v1/external-agent/tasks", (req, res) => {
+    res.json({ tasks: terminalTaskManager.listTasks() });
+});
+
+app.get("/api/v1/external-agent/tasks/:id", (req, res) => {
+    const task = terminalTaskManager.getTaskSnapshot(req.params.id);
+    if (!task) return res.status(404).json({ error: "任务不存在" });
+    res.json({ task });
+});
+
+app.post("/api/v1/external-agent/tasks/:id/input", (req, res) => {
+    const { text = "" } = req.body ?? {};
+    const ok = terminalTaskManager.sendInput(req.params.id, text);
+    if (!ok) return res.status(404).json({ error: "任务不存在或不可输入" });
+    res.json({ ok: true });
+});
+
+app.post("/api/v1/external-agent/tasks/:id/stop", (req, res) => {
+    const ok = terminalTaskManager.stopTask(req.params.id);
+    if (!ok) return res.status(404).json({ error: "任务不存在" });
+    res.json({ ok: true });
+});
+
 // ── POST /api/command — REPL 指令封装 ────────────────────
 app.post("/api/command", async (req, res) => {
     const { cmd } = req.body;
@@ -404,6 +447,34 @@ app.get("/{*path}", (req, res) => {
     }
 });
 
+function attachWebSocketBridge(httpServer) {
+    const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+    const sockets = new Set();
+
+    wss.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.send(JSON.stringify({
+            type: "ws.connected",
+            ts: Date.now(),
+            message: "WebSocket connected",
+        }));
+        socket.on("close", () => sockets.delete(socket));
+    });
+
+    const handler = (event) => {
+        const payload = JSON.stringify(event);
+        for (const s of sockets) {
+            if (s.readyState === 1) s.send(payload);
+        }
+    };
+    agentBus.on("*", handler);
+
+    return () => {
+        agentBus.off("*", handler);
+        wss.close();
+    };
+}
+
 // ── 启动 ─────────────────────────────────────────────────
 async function bootstrap() {
     // 预热记忆
@@ -411,9 +482,12 @@ async function bootstrap() {
     const allNames = skillManager.getAllTools().map((t) => t.name);
     statusBoard.refresh(allNames);
 
-    app.listen(PORT, () => {
+    const httpServer = createServer(app);
+    attachWebSocketBridge(httpServer);
+    httpServer.listen(PORT, () => {
         console.log(`\n[五行-Web] 后端服务启动 → http://localhost:${PORT}`);
         console.log(`[五行-Web] SSE 端点 → http://localhost:${PORT}/api/stream`);
+        console.log(`[五行-Web] WS 端点  → ws://localhost:${PORT}/ws`);
         console.log(`[五行-Web] 前端开发 → cd web && npm run dev\n`);
     });
 }

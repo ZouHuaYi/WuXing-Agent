@@ -19,6 +19,7 @@ import { join, resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import cfg from "../../config/wuxing.json" with { type: "json" };
 import { approvalManager } from "./approvalManager.js";
+import { terminalTaskManager } from "./terminalController.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -482,6 +483,48 @@ export const installNpmPackageTool = tool(
     }
 );
 
+// ── 工具 9：调用外部专家终端代理 ─────────────────────────
+export const callExternalAgentTool = tool(
+    async ({ agentName, taskPrompt, autoApprove = true, timeoutMs = 600000 }) => {
+        if (!agentName?.trim()) return "【错误】agentName 不能为空";
+        if (!taskPrompt?.trim()) return "【错误】taskPrompt 不能为空";
+
+        try {
+            const task = terminalTaskManager.startTask({
+                agentName: agentName.trim(),
+                taskPrompt: taskPrompt.trim(),
+                autoApprove: !!autoApprove,
+                timeoutMs: Math.max(5000, Math.min(3600000, Number(timeoutMs) || 600000)),
+            });
+
+            const finished = await terminalTaskManager.waitForExit(task.id);
+            if (!finished) return `【异常】任务未找到：${task.id}`;
+
+            const tail = (finished.logsTail ?? []).join("").slice(-1200);
+            return [
+                `【外部专家执行完成】${finished.agentName}`,
+                `任务ID：${finished.id}`,
+                `状态：${finished.status}（exit=${finished.exitCode}）`,
+                `摘要日志：`,
+                tail || "(无日志)",
+            ].join("\n");
+        } catch (e) {
+            return `【外部专家调用失败】${e.message}`;
+        }
+    },
+    {
+        name: "call_external_agent",
+        description:
+            "调用外部专家终端代理（例如 codex/claude），支持流式日志、进度识别、自动审批与超时控制。",
+        schema: z.object({
+            agentName: z.string().describe("外部代理名，如 codex、claude"),
+            taskPrompt: z.string().describe("要交给外部代理执行的任务描述"),
+            autoApprove: z.boolean().optional().describe("是否自动响应常见 [y/n] 审批提问，默认 true"),
+            timeoutMs: z.number().optional().describe("任务最长运行时间（毫秒），默认 600000"),
+        }),
+    }
+);
+
 export const ALL_TOOLS = [
     readFileTool,
     listDirTool,
@@ -491,4 +534,5 @@ export const ALL_TOOLS = [
     testRunnerTool,
     incorporateSkillTool,
     installNpmPackageTool,
+    callExternalAgentTool,
 ];

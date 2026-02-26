@@ -47,6 +47,36 @@ export async function decideApproval(id, decision, patchedCommand = "", reason =
   return res.json();
 }
 
+export async function startExternalAgent({ agentName, taskPrompt, autoApprove = true, timeoutMs = 600000 }) {
+  const res = await fetch(`${BASE}/v1/external-agent/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentName, taskPrompt, autoApprove, timeoutMs }),
+  });
+  return res.json();
+}
+
+export async function fetchExternalTasks() {
+  const res = await fetch(`${BASE}/v1/external-agent/tasks`);
+  return res.json();
+}
+
+export async function sendExternalInput(id, text) {
+  const res = await fetch(`${BASE}/v1/external-agent/tasks/${encodeURIComponent(id)}/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  return res.json();
+}
+
+export async function stopExternalTask(id) {
+  const res = await fetch(`${BASE}/v1/external-agent/tasks/${encodeURIComponent(id)}/stop`, {
+    method: "POST",
+  });
+  return res.json();
+}
+
 // SSE 订阅：返回关闭函数
 export function subscribeStream(onEvent) {
   const es = new EventSource(`${BASE}/stream`);

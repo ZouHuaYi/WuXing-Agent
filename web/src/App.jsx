@@ -4,8 +4,9 @@ import ThoughtStream from "./components/ThoughtStream.jsx";
 import StatusPanel from "./components/StatusPanel.jsx";
 import WorkspaceExplorer from "./components/WorkspaceExplorer.jsx";
 import ApprovalGate from "./components/ApprovalGate.jsx";
+import TerminalMonitor from "./components/TerminalMonitor.jsx";
 import { useSSE } from "./hooks/useSSE.js";
-import { LayoutPanelLeft, BrainCircuit, FolderCode, ChevronRight, ChevronLeft } from "lucide-react";
+import { LayoutPanelLeft, BrainCircuit, FolderCode, ChevronRight, ChevronLeft, TerminalSquare } from "lucide-react";
 
 // 五行能量指示条：基于最近10条思维流事件
 function ElementBar({ thoughts }) {
@@ -47,6 +48,7 @@ const RIGHT_TABS = [
   { id: "thought", label: "思维",    icon: BrainCircuit },
   { id: "status",  label: "状态",    icon: LayoutPanelLeft },
   { id: "workspace",label: "工作区", icon: FolderCode },
+  { id: "terminal",label: "监控室", icon: TerminalSquare },
 ];
 
 export default function App() {
@@ -100,7 +102,7 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         {/* 对话区 */}
         <div className="flex-1 min-w-0">
-          <ChatPanel />
+          <ChatPanel thoughts={thoughts} />
         </div>
 
         {/* 分隔线 + 折叠按钮 */}
@@ -150,6 +152,7 @@ export default function App() {
               )}
               {rightTab === "status" && <StatusPanel />}
               {rightTab === "workspace" && <WorkspaceExplorer />}
+              {rightTab === "terminal" && <TerminalMonitor thoughts={thoughts} />}
             </div>
           </div>
         )}

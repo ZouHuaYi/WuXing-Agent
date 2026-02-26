@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "PDF文档的标题"
+    },
+    "content": {
+      "type": "string",
+      "description": "PDF文档的内容，支持换行和以'- '开头的列表项"
+    },
+    "filename": {
+      "type": "string",
+      "description": "生成的PDF文件的保存路径及文件名（如'./report.pdf'）"
+    }
+  },
+  "required": [
+    "title",
+    "content",
+    "filename"
+  ]
+}
