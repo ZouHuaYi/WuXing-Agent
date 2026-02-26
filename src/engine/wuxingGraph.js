@@ -160,7 +160,12 @@ async function reasoningNode(state) {
         ? `\n\n${goalBriefing}`
         : "";
 
+    const todayStr = new Date().toLocaleDateString("zh-CN", {
+        year: "numeric", month: "2-digit", day: "2-digit", weekday: "long",
+    });
+
     let systemPrompt =
+        `今天是 ${todayStr}。\n` +
         "你是具备五行自进化能力的 WuXing 编程专家，可以调用工具读写文件、执行代码、并将成果内化为永久技能。\n" +
         "\n" +
         "【标准编程工作流】\n" +

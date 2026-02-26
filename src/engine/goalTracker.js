@@ -165,13 +165,18 @@ export class GoalTracker {
     // 输入：自由描述的长期目标文本
     // 输出：已写入 goals.json 的 Goal 对象
     async decompose(visionText) {
+        // 注入真实当前日期，防止 LLM 使用训练截止时间作为基准
+        const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
         const DECOMPOSE_PROMPT = `
 你是一个目标规划专家。将以下自然语言愿景拆解为结构化的长期目标计划。
+
+【重要】今天的实际日期是 ${today}，所有截止日期必须晚于此日期，不得使用过去的日期。
 
 要求：
 1. 提炼一个清晰的目标标题（≤30字）
 2. 生成 3-7 个可执行的里程碑，每个里程碑是一个具体可验证的任务
-3. 根据描述估算合理截止日期（格式 YYYY-MM-DD）
+3. 根据描述和今天日期（${today}）估算合理截止日期（格式 YYYY-MM-DD），必须是未来的日期
 4. 判断优先级（high / medium / low）
 
 输出格式（严格 JSON，不含 markdown）：
