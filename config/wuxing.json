@@ -19,7 +19,9 @@
     "lambda":              0.005,
     "semanticPreFilter":   0.65,
     "entropyTriggerEvery": 10,
-    "dreamMinDocs":        4
+    "dreamMinDocs":        4,
+    "topK":                5,
+    "contextMinScore":     0.30
   },
 
   "scoring": {

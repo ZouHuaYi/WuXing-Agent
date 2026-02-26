@@ -9,6 +9,7 @@ import { HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messag
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { WisdomMemory } from "./vectorStore.js";
+import { VectorMemory } from "../memory/vectorMemory.js";
 import { sense } from "./waterSensor.js";
 import { prune } from "./entropyReducer.js";
 import { WORKSPACE_DIR } from "./toolBox.js";
@@ -31,7 +32,8 @@ const llmBase = new ChatOpenAI({
     temperature: cfg.temperature.reasoning,
 });
 
-export const wisdomMemory = new WisdomMemory();
+export const wisdomMemory  = new WisdomMemory();
+export const vectorMemory  = new VectorMemory(wisdomMemory);  // 分层召回封装层
 
 // 进化计数器（进程生命周期内有效）
 let interactionCount = 0;
@@ -99,19 +101,28 @@ async function reasoningNode(state) {
     logger.info(EV.EARTH, "启动深层推理（含工具感知）...");
     const ctx = state.environmentContext;
 
-    // 工作区上下文注入：让 Agent 知道手头现有哪些文件，无需手动 list_workspace
+    // 工作区上下文注入
     const wsFiles = await scanWorkspace();
     const wsContext = wsFiles.length > 0
         ? `\n\n【工作区文件 workspace/】：${wsFiles.join("、")}\n` +
           "可直接用文件名引用上述文件（read_file / execute_code / test_runner），无需重新创建。"
         : "\n\n【工作区 workspace/ 当前为空】";
 
+    // 【木-记忆注入】Top-K 分层语义召回，将相关经验注入推理上下文
+    const userQuery  = state.messages[state.messages.length - 1]?.content ?? "";
+    const memContext = await vectorMemory.buildContext(userQuery, cfg.memory.topK ?? 5);
+    const memSection = memContext
+        ? `\n\n【相关历史经验（语义召回）】\n${memContext}\n` +
+          "以上经验仅供参考，请结合当前问题判断是否适用。"
+        : "";
+
     let systemPrompt =
         "你是具备 MCP 权限的 WuXing 编程专家，可以调用工具来读写文件并执行代码。\n" +
         "工作流程：list_dir 探路 → read_file 精读 → write_file 写入 → test_runner 验证 → execute_code 运行。\n" +
         "写完代码后，必须调用 test_runner 进行验证；若测试失败，根据错误报告修复代码，再次验证，形成自愈闭环。\n" +
         "工具调用完成后，综合结果给出最终答案，并提炼因果准则。" +
-        wsContext;
+        wsContext +
+        memSection;
 
     if (ctx?.urgency > 0.7) {
         systemPrompt += "\n用户情绪较为紧迫，请直接给出最核心的3条建议，每条不超过30字。";

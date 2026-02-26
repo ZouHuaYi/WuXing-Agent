@@ -8,7 +8,7 @@
 import "dotenv/config";
 import readline from "readline";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { app, wisdomMemory } from "./src/engine/wuxingGraph.js";
+import { app, wisdomMemory, vectorMemory } from "./src/engine/wuxingGraph.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -78,6 +78,8 @@ async function initSystem() {
     console.log("    :config               - 查看 MCP 服务连接状态");
     console.log("");
     console.log("    :team [任务]           - 团队模式（Commander 调度 Executor + Researcher 协作）");
+    console.log("    :pin  <准则>           - 钉住核心记忆（永不裁剪）");
+    console.log("    :mem                  - 查看分层记忆统计（core/long_term/short_term）");
     console.log("");
     console.log("    :c                    - 清除当前会话上下文");
     console.log("    exit                  - 安全退出并保存记忆");
@@ -386,6 +388,43 @@ function showMcpConfig() {
 }
 
 // ─────────────────────────────────────────────
+// 分层记忆指令
+// ─────────────────────────────────────────────
+
+/**
+ * :pin <准则文本>
+ * 将一段准则钉入 core 层，永不被认知对齐裁剪
+ */
+async function handlePinMemory(ruleText) {
+    if (!ruleText) {
+        console.log("\n[木-记忆] 用法：:pin <准则文本>");
+        console.log("  示例：:pin 当涉及路径操作时，必须使用 path.basename 防范路径穿越攻击\n");
+        return;
+    }
+    await vectorMemory.pin(ruleText);
+    const stats = vectorMemory.stats();
+    console.log(`\n[木-核心] 已钉住准则："${ruleText.slice(0, 60)}"`);
+    console.log(`[木-核心] 核心记忆库现有 ${stats.core} 条，总计 ${stats.total} 条\n`);
+    logger.info(EV.WOOD, `核心记忆钉住：${ruleText}`);
+}
+
+/**
+ * :mem
+ * 展示分层记忆统计（core / long_term / short_term）
+ */
+function showLayeredMemoryStats() {
+    const stats = vectorMemory.stats();
+    console.log(`\n${DIVIDER}`);
+    console.log("[木-记忆] 分层记忆统计");
+    console.log(DIVIDER);
+    console.log(`  核心记忆 (core)       : ${stats.core      ?? 0} 条  ← 永不裁剪`);
+    console.log(`  长期记忆 (long_term)  : ${stats.long_term ?? 0} 条`);
+    console.log(`  短期记忆 (short_term) : ${stats.short_term ?? 0} 条  ← 超期自动降权`);
+    console.log(`  总计                  : ${stats.total} 条`);
+    console.log(`${DIVIDER}\n`);
+}
+
+// ─────────────────────────────────────────────
 // 团队协作处理器
 // ─────────────────────────────────────────────
 
@@ -531,6 +570,8 @@ rl.on("line", async (line) => {
         case ":install":  await handleMcpInstall(arg);        break;
         case ":config":   showMcpConfig();                    break;
         case ":team":     await handleTeam(arg);              break;
+        case ":pin":      await handlePinMemory(arg);         break;
+        case ":mem":      showLayeredMemoryStats();            break;
         default:          await handleChat(input);            break;
     }
 

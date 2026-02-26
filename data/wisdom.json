@@ -39,5 +39,13 @@
     "createdAt": 1772011997432,
     "confidence": 0.95,
     "hitCount": 0
+  },
+  {
+    "task": "【核心准则】当涉及文件写入时必须校验路径边界",
+    "result": "当涉及文件写入时必须校验路径边界",
+    "createdAt": 1772071170485,
+    "confidence": 1,
+    "hitCount": 0,
+    "memory_type": "core"
   }
 ]

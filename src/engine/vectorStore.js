@@ -27,7 +27,7 @@ function hashTask(task) {
     return createHash("md5").update(String(task)).digest("hex");
 }
 
-function cosineSimilarity(a, b) {
+export function cosineSimilarity(a, b) {
     let dot = 0, normA = 0, normB = 0;
     for (let i = 0; i < a.length; i++) {
         dot  += a[i] * b[i];
@@ -111,10 +111,11 @@ export class WisdomMemory {
                 content:  d.task,
                 embedding,
                 metadata: {
-                    result:     d.result,
-                    createdAt:  d.createdAt  ?? Date.now(),
-                    confidence: d.confidence ?? 1.0,
-                    hitCount:   d.hitCount   ?? 0,
+                    result:      d.result,
+                    createdAt:   d.createdAt   ?? Date.now(),
+                    confidence:  d.confidence  ?? 1.0,
+                    hitCount:    d.hitCount    ?? 0,
+                    memory_type: d.memory_type ?? "long_term",
                 },
             });
         }
@@ -201,16 +202,16 @@ export class WisdomMemory {
 
     // ── 固化经验 ─────────────────────────────────────────────
 
-    async memorize(task, result, confidence = 1.0) {
+    async memorize(task, result, confidence = 1.0, memory_type = "long_term") {
         const h         = hashTask(task);
         const embedding = await this.embeddings.embedQuery(task);
         const createdAt = Date.now();
 
         this.vectors.push({
             content: task, embedding,
-            metadata: { result, createdAt, confidence, hitCount: 0 },
+            metadata: { result, createdAt, confidence, hitCount: 0, memory_type },
         });
-        this.rawDocs.push({ task, result, createdAt, confidence, hitCount: 0 });
+        this.rawDocs.push({ task, result, createdAt, confidence, hitCount: 0, memory_type });
 
         // 新向量写入缓存（下次启动无需重算）
         const cache  = await this._loadVecCache();
@@ -240,13 +241,20 @@ export class WisdomMemory {
     // ── 认知对齐（淘汰低置信度糟粕）────────────────────────────
 
     async refreshConfidence() {
-        const before     = this.rawDocs.length;
+        const before        = this.rawDocs.length;
         const { minConfidence } = cfg.scoring;
-        const survivors  = this.rawDocs.filter((d) => (d.confidence ?? 1.0) >= minConfidence);
+
+        // core 层永不裁剪，其他层按置信度过滤
+        const survivors  = this.rawDocs.filter(
+            (d) => d.memory_type === "core" || (d.confidence ?? 1.0) >= minConfidence
+        );
         const removed    = before - survivors.length;
+        const coreKept   = this.rawDocs.filter((d) => d.memory_type === "core").length;
+
         if (removed > 0) {
             logger.evolution(EV.WOOD,
-                `认知对齐：淘汰 ${removed} 条低置信记忆（< ${minConfidence}），剩余 ${survivors.length} 条`
+                `认知对齐：淘汰 ${removed} 条低置信记忆（< ${minConfidence}），` +
+                `保护 ${coreKept} 条核心记忆，剩余 ${survivors.length} 条`
             );
             await this.replaceAll(survivors);
         }
