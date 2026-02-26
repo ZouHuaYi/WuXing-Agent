@@ -2,7 +2,7 @@
 // 【木-自生长】：自写技能系统
 //
 // 当反思节点（金）提炼出的因果律得分超过 skillThreshold 时，
-// 主动判断是否值得封装为目录型技能卡（skills/{name}/SKILL.md + schema.json + scripts/index.js）。
+// 主动判断是否值得封装为目录型技能卡（skills/{name}/SKILL.md + schema.json + scripts/index.py）。
 //
 // 这实现了"五行自生长"：
 //   金（提炼） → 分数足够高 → 木（种下新技能） → 火（下次直接使用）
@@ -12,7 +12,7 @@
 //   - skill_name:    snake_case 标识符
 //   - description:   触发场景描述
 //   - parameters:    JSON Schema
-//   - handler_code:  完整的 ESM handler 函数体（可执行的 Node.js 代码）
+//   - handler_code:  完整的 Python 脚本（通过 stdin 读取 JSON 参数，stdout 输出结果）
 import { ChatOpenAI }      from "@langchain/openai";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { mkdir, writeFile, existsSync } from "fs";
@@ -32,14 +32,36 @@ const llm = new ChatOpenAI({
     temperature: 0.2,   // 低温保证代码输出稳定
 });
 
-// 评估提示词：让 LLM 决定是否值得封装、并生成完整技能定义
+// 评估提示词：让 LLM 决定是否值得封装、并生成 Python 脚本
 const EVALUATE_PROMPT = `
 你是技能封装专家。判断以下"任务-解法"对是否值得封装为一个可复用的工具函数，并输出严格的 JSON。
 
 判断标准（需同时满足）：
 1. 该解法包含明确可参数化的步骤（有输入 → 有输出）
 2. 相同类型的任务在未来可能反复出现
-3. 核心逻辑可以用 Node.js（无外部 API Key）实现
+3. 核心逻辑可以用 Python 标准库或常见包实现（requests/json/datetime 等）
+
+【关键要求】handler_code 必须是 Python 脚本，遵循以下约定：
+- 通过 sys.stdin 读取 JSON 格式的参数对象
+- 通过 print() 输出最终结果（字符串）
+- 不要打印调试信息；错误信息写到 sys.stderr
+- 只使用标准库或极常见的包（requests / json / datetime / os / re 等）
+- 不要使用 Node.js / npm
+
+示例 handler_code 模板：
+"""
+import sys, json
+
+def handler(args):
+    # args 是从 stdin 解析的字典
+    name = args.get('name', 'world')
+    return f"Hello, {name}!"
+
+if __name__ == '__main__':
+    raw = sys.stdin.read().strip()
+    args = json.loads(raw) if raw else {}
+    print(handler(args))
+"""
 
 输出格式（不要任何 markdown 包裹，直接输出 JSON）：
 {
@@ -54,7 +76,7 @@ const EVALUATE_PROMPT = `
     },
     "required": ["param1"]
   },
-  "handler_code": "完整的 ES Module handler 函数，格式：export async function handler(args) { ... }"
+  "handler_code": "完整 Python 脚本内容（不含 markdown 围栏）"
 }
 
 如果 should_create 为 false，其余字段可以为 null。
@@ -170,14 +192,26 @@ export class SkillWriter {
             null, 2
         );
 
-        // scripts/index.js — 剔除可能的 markdown 围栏
-        const handlerCode = (def.handler_code ?? "export async function handler(args) { return '(尚未实现)'; }")
-            .replace(/^```(?:js|javascript)?\n?/, "")
+        // scripts/index.py — 剔除可能的 markdown 围栏（```python ... ```）
+        const defaultPy = [
+            "import sys, json",
+            "",
+            "def handler(args):",
+            "    return '(尚未实现)'",
+            "",
+            "if __name__ == '__main__':",
+            "    raw = sys.stdin.read().strip()",
+            "    args = json.loads(raw) if raw else {}",
+            "    print(handler(args))",
+        ].join("\n");
+
+        const handlerCode = (def.handler_code ?? defaultPy)
+            .replace(/^```(?:python|py)?\n?/i, "")
             .replace(/\n?```$/, "")
             .trim();
 
         await writeFileAsync(join(dirPath, "SKILL.md"),          skillMd,     "utf-8");
         await writeFileAsync(join(dirPath, "schema.json"),        schema,      "utf-8");
-        await writeFileAsync(join(scriptsPath, "index.js"),       handlerCode, "utf-8");
+        await writeFileAsync(join(scriptsPath, "index.py"),       handlerCode, "utf-8");
     }
 }

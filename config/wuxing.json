@@ -54,12 +54,21 @@
     "_comment":           "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 工作区超时",
     "maxCycles":          25,
     "executionTimeoutMs": 30000,
-    "workspaceDir":       "workspace"
+    "workspaceDir":       "workspace",
+    "_pythonComment":     "技能脚本首选语言。Windows 通常是 python，Linux/Mac 是 python3",
+    "pythonCmd":          "python"
   },
 
   "repl": {
     "_comment":        "交互模式参数：dreamIntervalMs 后台梦境周期，sessionWindowSize 多轮上下文保留轮数",
     "dreamIntervalMs":   1800000,
     "sessionWindowSize": 6
+  },
+
+  "session": {
+    "_comment":          "持久化会话管理：跨进程断点续接 + 自动 LLM 摘要压缩（防 Token 爆炸）",
+    "persistFile":       "data/sessions/current.json",
+    "maxMessages":       40,
+    "summaryKeepRecent": 10
   }
 }

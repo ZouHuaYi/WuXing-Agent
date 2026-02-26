@@ -338,6 +338,11 @@ export const incorporateSkillTool = tool(
         try {
             await mkdir(scriptsDir, { recursive: true });
 
+            // 根据源文件扩展名决定 handler 文件名（.py 优先）
+            const srcExt     = sourceFile.toLowerCase().endsWith(".py") ? ".py" : ".js";
+            const handlerFile = `index${srcExt}`;
+            const langLabel   = srcExt === ".py" ? "Python" : "Node.js";
+
             // SKILL.md
             const skillMd = [
                 `---`,
@@ -351,7 +356,7 @@ export const incorporateSkillTool = tool(
                 ``,
                 `## 来源`,
                 ``,
-                `workspace/${basename(sourceFile)}`,
+                `workspace/${basename(sourceFile)}（${langLabel}）`,
             ].join("\n");
 
             // schema.json（从 parametersJson 参数解析，默认空对象）
@@ -364,7 +369,7 @@ export const incorporateSkillTool = tool(
 
             await writeFile(join(skillDir, "SKILL.md"),        skillMd,                      "utf-8");
             await writeFile(join(skillDir, "schema.json"),     JSON.stringify(schema, null, 2), "utf-8");
-            await writeFile(join(scriptsDir, "index.js"),      handlerCode,                  "utf-8");
+            await writeFile(join(scriptsDir, handlerFile),     handlerCode,                  "utf-8");
 
             // 热加载：动态导入 skillManager（避免模块加载时的循环依赖）
             try {
@@ -374,9 +379,9 @@ export const incorporateSkillTool = tool(
 
             return [
                 `【内化成功】技能已写入 skills/${name}/`,
-                `  SKILL.md      — 技能定义`,
-                `  schema.json   — 参数规格`,
-                `  scripts/index.js — 处理逻辑（来自 workspace/${basename(sourceFile)}）`,
+                `  SKILL.md              — 技能定义`,
+                `  schema.json           — 参数规格`,
+                `  scripts/${handlerFile} — 处理逻辑（${langLabel}，来自 workspace/${basename(sourceFile)}）`,
                 `技能已热加载，可立即在对话中调用。`,
             ].join("\n");
 
@@ -387,9 +392,11 @@ export const incorporateSkillTool = tool(
     {
         name: "incorporate_skill",
         description:
-            "将 workspace/ 中测试通过的 Node.js 文件提升为正式目录型技能卡（skills/{name}/）并自动热加载。\n" +
-            "必须先用 test_runner 验证代码无误，再调用此工具完成自进化闭环。\n" +
-            "sourceFile 中必须包含 export async function handler(args){} 或兼容的导出。",
+            "将 workspace/ 中测试通过的代码文件提升为正式目录型技能卡（skills/{name}/）并自动热加载。\n" +
+            "支持 Python（.py，推荐）和 Node.js（.js）两种 handler：\n" +
+            "  .py — Python 脚本，通过 stdin/stdout JSON 通信，依赖用 pip 管理\n" +
+            "  .js — ESM 模块，必须导出 export async function handler(args){}\n" +
+            "必须先用 test_runner 验证代码无误，再调用此工具完成自进化闭环。",
         schema: z.object({
             name:           z.string().describe("技能标识符（snake_case，如 fetch_btc_price）"),
             sourceFile:     z.string().describe("workspace/ 中的源文件名（如 btc_fetcher.js）"),

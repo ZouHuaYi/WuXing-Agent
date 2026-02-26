@@ -8,27 +8,62 @@
 //       ├── SKILL.md          必须 — YAML frontmatter 定义 name / description
 //       ├── schema.json       可选 — 工具入参 JSON Schema
 //       └── scripts/
-//           └── index.js      可选 — handler 实现（export async function handler(args){}）
+//           ├── index.py      首选 — Python handler（通过 stdin/stdout JSON 通信）
+//           └── index.js      备选 — ESM handler（export async function handler(args){}）
 //
-// SKILL.md 格式示例：
+// Python handler 约定：
+//   - 通过 stdin 接收 JSON 参数对象
+//   - 通过 stdout 输出结果字符串
+//   - 非零退出码 = 执行失败
 //
-//   ---
-//   name: get_datetime
-//   description: 获取当前系统时间...
-//   ---
-//   # Get Datetime
-//   人类可读的文档...
-//
-// handler 优先级：
-//   1. scripts/index.js （推荐）
-//   2. Stub（仅注册 Schema，调用时提示尚未实现）
+// handler 优先级（Python 优先）：
+//   1. scripts/index.py  ← 优先（依赖用 pip 管理，更稳定）
+//   2. scripts/index.js  ← 备选（纯计算类 / 已有 Node.js 实现）
+//   3. Stub              ← 兜底
 //
 // 兼容旧格式（平铺型）：SKILLS.md 中的 JSON 块，见 legacyLoadFromMarkdown()
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { validateSkillConfig, normalizeSkillConfig } from "../utils/schemaValidator.js";
 import { logger, EV } from "../utils/logger.js";
+import cfg from "../../config/wuxing.json" with { type: "json" };
+
+const execFileAsync = promisify(execFile);
+const PYTHON_CMD    = cfg.tools?.pythonCmd ?? "python";
+const SKILL_TIMEOUT = (cfg.tools?.executionTimeoutMs ?? 15000);
+
+// ── Python 子进程 handler 工厂 ─────────────────────────────
+// 将 Python 脚本包装为与 JS handler 相同签名的 async 函数
+// 通信协议：args → JSON → stdin；stdout → 结果字符串
+function createPythonHandler(scriptPath, skillName) {
+    return async (args) => {
+        const input = JSON.stringify(args ?? {});
+        try {
+            const { stdout, stderr } = await execFileAsync(
+                PYTHON_CMD,
+                [scriptPath],
+                {
+                    input,
+                    timeout:   SKILL_TIMEOUT,
+                    env:       { ...process.env },
+                    maxBuffer: 256 * 1024,
+                }
+            );
+            const out = (stdout ?? "").trim();
+            const err = (stderr ?? "").trim();
+            if (out) return out;
+            if (err) return `[stderr] ${err}`;
+            return "(无输出)";
+        } catch (e) {
+            const msg    = e.killed ? `执行超时（>${SKILL_TIMEOUT}ms）` : e.message;
+            const stderr = (e.stderr ?? "").slice(0, 400);
+            return `【技能 ${skillName} 执行失败】${msg}${stderr ? `\n${stderr}` : ""}`;
+        }
+    };
+}
 
 // ── YAML Frontmatter 解析（仅支持简单字符串值，满足 name/description 需求）─
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
@@ -89,29 +124,39 @@ export async function loadDirectorySkill(dirPath) {
 
     const config = normalizeSkillConfig(rawConfig);
 
-    // ── 4. 查找 handler ───────────────────────────────────────
-    const handlerPath = join(dirPath, "scripts", "index.js");
-    let handler = null;
-    let isStub  = false;
+    // ── 4. 查找 handler（Python 优先 → JS 备选 → Stub）────────
+    const pyPath = join(dirPath, "scripts", "index.py");
+    const jsPath = join(dirPath, "scripts", "index.js");
+    let handler  = null;
+    let isStub   = false;
 
-    if (existsSync(handlerPath)) {
+    // 优先：Python 脚本（依赖用 pip 管理，避免 Node.js 模块路径问题）
+    if (existsSync(pyPath)) {
+        handler = createPythonHandler(pyPath, config.name);
+        logger.info(EV.WOOD, `技能 ${config.name}：加载 scripts/index.py（Python）`);
+    }
+
+    // 备选：ESM JS handler
+    if (!handler && existsSync(jsPath)) {
         try {
-            const fileUrl = pathToFileURL(handlerPath);
+            const fileUrl = pathToFileURL(jsPath);
             fileUrl.searchParams.set("t", Date.now());
             const mod = await import(fileUrl.href);
             const fn  = mod.handler ?? mod.default;
             if (typeof fn !== "function") throw new Error("未导出 handler 函数");
             handler = fn;
-            logger.info(EV.WOOD, `技能 ${config.name}：加载 scripts/index.js`);
+            logger.info(EV.WOOD, `技能 ${config.name}：加载 scripts/index.js（JS）`);
         } catch (e) {
-            logger.warn(EV.METAL, `[金-审计] 技能 ${config.name} handler 加载失败：${e.message}`);
+            logger.warn(EV.METAL, `[金-审计] 技能 ${config.name} JS handler 加载失败：${e.message}`);
         }
     }
 
+    // 兜底：Stub
     if (!handler) {
         isStub  = true;
         handler = async () =>
-            `【技能 "${config.name}" 尚未实现】请创建 ${dirPath}/scripts/index.js 并导出 handler 函数。`;
+            `【技能 "${config.name}" 尚未实现】` +
+            `请在 ${dirPath}/scripts/ 下创建 index.py（推荐）或 index.js。`;
         logger.info(EV.WOOD, `技能 ${config.name}：Stub handler（待实现）`);
     }
 

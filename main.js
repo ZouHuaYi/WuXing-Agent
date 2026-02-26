@@ -9,6 +9,7 @@ import "dotenv/config";
 import readline from "readline";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { app, wisdomMemory, vectorMemory, skillWriter } from "./src/engine/wuxingGraph.js";
+import { sessionManager } from "./src/engine/sessionManager.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -29,6 +30,7 @@ const DOUBLE_DIVIDER = "=".repeat(56);
 // ── 多轮会话上下文窗口 ────────────────────────────────────
 // 存储 [HumanMessage, AIMessage, HumanMessage, AIMessage ...]
 // 最多保留 cfg.repl.sessionWindowSize 条消息（含 Human + AI 双向）
+// 启动时从 data/sessions/current.json 恢复（断点续接）
 const sessionMessages = [];
 
 function pushSession(humanMsg, aiMsg) {
@@ -39,6 +41,9 @@ function pushSession(humanMsg, aiMsg) {
     while (sessionMessages.length > cfg.repl.sessionWindowSize) {
         sessionMessages.splice(0, 2);
     }
+
+    // 持久化：每次对话后实时写盘，断电也不怕
+    sessionManager.saveHistory(sessionMessages);
 }
 
 // ── 全局组件 ─────────────────────────────────────────────
@@ -83,7 +88,8 @@ async function initSystem() {
     console.log("    :grow <任务> <解法>    - 手动触发技能封装（自生长）");
     console.log("    :see  [路径]           - 视觉感知（同 :v，别名）");
     console.log("");
-    console.log("    :c                    - 清除当前会话上下文");
+    console.log("    :c                    - 清除会话上下文（内存 + 磁盘）");
+    console.log("    :history              - 查看持久化会话状态（轮数、字符、是否已摘要）");
     console.log("    exit                  - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
 
@@ -91,6 +97,13 @@ async function initSystem() {
     const count = wisdomMemory.getAllDocs().length;
     logger.info(EV.SYSTEM, `经验库就绪，积累 ${count} 条因果律`);
     console.log(`\n[系统] 经验库就绪，当前积累 ${count} 条因果律`);
+
+    // 水-会话：从磁盘恢复上一次对话上下文（断点续接）
+    const prevSession = sessionManager.loadHistory();
+    if (prevSession.length > 0) {
+        sessionMessages.push(...prevSession);
+        console.log(`[水-会话] 已恢复 ${prevSession.length} 条上下文，可继续上次对话`);
+    }
 
     // 水-感知工作区：启动时一眼看清手头有什么代码产出
     if (!existsSync(WORKSPACE_DIR)) {
@@ -576,7 +589,18 @@ function showMemoryStatus() {
 
 function clearSession() {
     sessionMessages.length = 0;
-    console.log("\n[系统] 会话上下文已清除，开始全新对话\n");
+    sessionManager.clear();
+    console.log("\n[系统] 会话上下文已清除（内存 + 磁盘），开始全新对话\n");
+}
+
+function showHistory() {
+    const s = sessionManager.stats(sessionMessages);
+    console.log(`\n[水-会话] 持久化状态`);
+    console.log(`  当前轮数 : ${s.count} 条消息`);
+    console.log(`  估算字符 : ${s.chars} 字符（约 ${Math.round(s.chars / 4)} tokens）`);
+    console.log(`  含摘要   : ${s.hasSummary ? "是（土之归藏已触发）" : "否"}`);
+    console.log(`  磁盘状态 : ${s.persisted ? "已持久化 ✓" : "未持久化"}`);
+    console.log();
 }
 
 // ─────────────────────────────────────────────
@@ -605,6 +629,7 @@ rl.on("line", async (line) => {
         case ":e":       await handleEvolution();            break;
         case ":m":       showMemoryStatus();                 break;
         case ":c":       clearSession();                     break;
+        case ":history": showHistory();                     break;
         case ":w":
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;
@@ -627,6 +652,11 @@ rl.on("line", async (line) => {
 
 rl.on("close", async () => {
     console.log("\n[系统] 正在固化内丹，保存记忆至磁盘...");
+
+    // 水-会话：退出时最终保存（确保最后一条消息落盘）
+    if (sessionMessages.length > 0) {
+        sessionManager.saveHistory(sessionMessages);
+    }
 
     // 关闭所有 MCP 子进程（防止进程泄漏）
     await mcpPool.disconnectAll();
