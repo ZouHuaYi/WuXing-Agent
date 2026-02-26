@@ -11,6 +11,7 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { app, wisdomMemory, vectorMemory, skillWriter } from "./src/engine/wuxingGraph.js";
 import { sessionManager } from "./src/engine/sessionManager.js";
 import { goalTracker }   from "./src/engine/goalTracker.js";
+import { statusBoard }   from "./src/engine/statusBoard.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -92,6 +93,8 @@ async function initSystem() {
     console.log("    :c                    - 清除会话上下文（内存 + 磁盘）");
     console.log("    :history              - 查看持久化会话状态（轮数、字符、是否已摘要）");
     console.log("    :vision <愿景描述>    - 输入长期愿景，AI 自动拆解为里程碑计划");
+    console.log("    :status               - 刷新并查看自我状态看板（STATUS.md 摘要）");
+    console.log("    :status resolve <词>  - 标记 STATUS.md 中某个缺陷已修复");
     console.log("    :goal <子指令>        - 长期目标管理（add/list/done/complete/briefing）");
     console.log("    exit                  - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
@@ -149,6 +152,11 @@ async function initSystem() {
         console.log("[木-技能] skills/ 目录暂无技能，内置工具集就绪");
     }
     console.log();
+
+    // 金-反射：生成/刷新 STATUS.md（包含技能列表、目标、缺陷看板）
+    const allToolNames = skillManager.getAllTools().map((t) => t.name);
+    statusBoard.refresh(allToolNames);
+    console.log("[金-反射] STATUS.md 已刷新（自我状态看板就绪）");
 
     // 后台梦境定时器（水生木：时间滋养进化）
     const intervalMs = cfg.repl.dreamIntervalMs;
@@ -606,6 +614,29 @@ function clearSession() {
     console.log("\n[系统] 会话上下文已清除（内存 + 磁盘），开始全新对话\n");
 }
 
+// ── :status 指令处理器 ───────────────────────────────────
+function handleStatus(arg) {
+    const sub     = arg.trim().split(/\s+/)[0] ?? "";
+    const keyword = arg.trim().slice(sub.length).trim();
+
+    // :status resolve <关键词> → 标记缺陷已修复
+    if (sub === "resolve" && keyword) {
+        const ok = statusBoard.resolveDefect(keyword);
+        console.log(ok
+            ? `\n[金-反射] 缺陷已标记修复：${keyword}\n`
+            : `\n[金-反射] 未找到匹配缺陷：${keyword}\n`
+        );
+        return;
+    }
+
+    // 默认：刷新并展示精简摘要
+    const allToolNames = skillManager.getAllTools().map((t) => t.name);
+    statusBoard.refresh(allToolNames);
+    const ctx = statusBoard.getContext(800);
+    console.log(`\n${ctx}`);
+    console.log(`\n[金-反射] STATUS.md 已更新（根目录可查看完整看板）\n`);
+}
+
 // ── :vision 指令处理器 ───────────────────────────────────
 // 将一段自然语言愿景拆解为结构化目标 + 里程碑，写入 goals.json
 async function handleVision2(arg) {
@@ -770,6 +801,7 @@ rl.on("line", async (line) => {
         case ":history": showHistory();                     break;
         case ":goal":    await handleGoal(arg);             break;
         case ":vision":  await handleVision2(arg);          break;
+        case ":status":  handleStatus(arg);                 break;
         case ":w":
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;

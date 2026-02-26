@@ -16,6 +16,8 @@ import { prune } from "./entropyReducer.js";
 import { WORKSPACE_DIR } from "./toolBox.js";
 import { skillManager } from "./skillManager.js";
 import { goalTracker }  from "./goalTracker.js";
+import { statusBoard }  from "./statusBoard.js";
+import { getSnapshotLine } from "./awareness.js";
 import { readdir } from "fs/promises";
 import { existsSync } from "fs";
 import cfg from "../../config/wuxing.json" with { type: "json" };
@@ -160,12 +162,13 @@ async function reasoningNode(state) {
         ? `\n\n${goalBriefing}`
         : "";
 
-    const todayStr = new Date().toLocaleDateString("zh-CN", {
-        year: "numeric", month: "2-digit", day: "2-digit", weekday: "long",
-    });
+    // 实时环境快照（单行，防 Token 膨胀）
+    const envLine   = getSnapshotLine();
+    // 状态看板精简摘要（含缺陷警告 + 活跃目标）
+    const statusCtx = statusBoard.getContext(400);
 
     let systemPrompt =
-        `今天是 ${todayStr}。\n` +
+        `[实时环境] ${envLine}\n${statusCtx}\n\n` +
         "你是具备五行自进化能力的 WuXing 编程专家，可以调用工具读写文件、执行代码、并将成果内化为永久技能。\n" +
         "\n" +
         "【标准编程工作流】\n" +
@@ -367,6 +370,29 @@ async function reflectionNode(state) {
     if (interactionCount % cfg.memory.entropyTriggerEvery === 0) {
         logger.info(EV.ENTROPY, `第 ${interactionCount} 次交互，触发定期熵减...`);
         await prune(wisdomMemory);
+    }
+
+    // 金-反射：检测执行失败信号，写入 STATUS.md 待优化缺陷
+    // 判据：最后一条 ToolMessage 或 AI 回答中包含明确失败词
+    const FAILURE_SIGNAL = /【测试失败】|【执行错误】|【错误】|失败|error|exception/i;
+    const allToolResults = state.messages
+        .filter((m) => m._getType?.() === "tool")
+        .map((m) => String(m.content ?? ""));
+    const lastToolResult = allToolResults[allToolResults.length - 1] ?? "";
+
+    if (FAILURE_SIGNAL.test(lastToolResult) || FAILURE_SIGNAL.test(lastAns)) {
+        // 判断失败类型
+        const type = lastToolResult.includes("超时") ? "TIMEOUT"
+            : lastToolResult.includes("语法") || lastToolResult.includes("SyntaxError") ? "SYNTAX"
+            : lastToolResult.includes("权限") ? "PERMISSION"
+            : "EXECUTION";
+
+        setImmediate(() => {
+            try {
+                statusBoard.recordFailure(userTask, lastToolResult || lastAns, type);
+                logger.warn(EV.METAL, `[金-反射] 失败教训已记入 STATUS.md [${type}]`);
+            } catch { /* 静默 */ }
+        });
     }
 
     // 神-意志：反思完成后，异步检查本次任务是否推进了长期目标（不阻塞主流程）
