@@ -22,6 +22,7 @@ import { readdir } from "fs/promises";
 import { existsSync } from "fs";
 import cfg from "../../config/wuxing.json" with { type: "json" };
 import { logger, EV } from "../utils/logger.js";
+import { agentBus, EVENT_TYPES as ET } from "./eventBus.js";
 
 // ── LLM 实例 ─────────────────────────────────────────────
 // 反思节点不挂工具，避免在复盘时意外触发工具调用
@@ -79,6 +80,7 @@ function requiresExecution(query, ctx) {
 async function waterNode(state) {
     const lastInput = state.messages[state.messages.length - 1].content;
     console.log("\n[水-感知] 正在解析环境流...");
+    agentBus.push(ET.WATER, "water", "正在解析环境流...", { query: lastInput.slice(0, 100) });
 
     const ctx = await sense(lastInput);
     logger.info(EV.WATER,
@@ -99,20 +101,22 @@ async function intuitionNode(state) {
 
     if (!wisdom) {
         logger.info(EV.FIRE, "经验库未覆盖，转交土层...");
+        agentBus.push(ET.FIRE_INTUITION, "fire", "经验库未覆盖，转交推理层...");
         return { status: "reasoning", wisdomHint: null };
     }
 
     // 命中经验库，但需要判断是否应该绕过推理
     if (requiresExecution(lastInput, ctx)) {
-        // 实时数据 / 行动类查询：将经验作为策略提示注入推理层，不直接返回
         logger.info(EV.FIRE,
             "经验库命中（策略提示），但查询需要实时执行，透传推理层..."
         );
+        agentBus.push(ET.FIRE_INTUITION, "fire", "命中经验（策略提示），透传推理层执行...", { hint: wisdom.slice(0, 80) });
         return { wisdomHint: wisdom, status: "reasoning" };
     }
 
     // 纯知识型查询（无时效、无操作），直接复用缓存经验
     logger.info(EV.FIRE, "因果律命中，直接输出");
+    agentBus.push(ET.FIRE_INTUITION, "fire", "因果律命中，直接输出", { wisdom: wisdom.slice(0, 120) });
     return { foundWisdom: wisdom, wisdomHint: null, status: "completed" };
 }
 
@@ -134,6 +138,7 @@ async function scanWorkspace() {
 
 async function reasoningNode(state) {
     logger.info(EV.EARTH, "启动深层推理（含工具感知）...");
+    agentBus.push(ET.EARTH_REASONING, "earth", "启动深层推理（System 2 慢思考）...");
     const ctx = state.environmentContext;
 
     // 工作区上下文注入
@@ -226,6 +231,8 @@ async function fireToolNode(state) {
 
     console.log(`\n   [火-执行] 调用 ${calls.length} 个工具: ${calls.map((c) => c.name).join(", ")}`);
     logger.info(EV.FIRE, `工具执行：${calls.map((c) => `${c.name}(${JSON.stringify(c.args).slice(0, 60)})`).join(" | ")}`);
+    agentBus.push(ET.FIRE_ACTION, "fire", `调用工具：${calls.map((c) => c.name).join(", ")}`,
+        { tools: calls.map((c) => ({ name: c.name, args: JSON.stringify(c.args).slice(0, 80) })) });
 
     const toolMap = skillManager.getToolMap();  // 每次执行前取最新映射
     const results = await Promise.all(
@@ -288,6 +295,7 @@ const SECURITY_HINT =
 
 async function reflectionNode(state) {
     logger.info(EV.METAL, "正在进行因果质量审计...");
+    agentBus.push(ET.METAL_REFLECT, "metal", "因果质量审计中...");
     interactionCount++;
 
     const userTask = state.messages[0].content;
@@ -364,6 +372,7 @@ async function reflectionNode(state) {
 
     if (rule) {
         await wisdomMemory.memorize(userTask, rule, confidence);
+        agentBus.push(ET.WOOD_MEMORY, "wood", `因果律已固化（置信度 ${confidence}%）`, { rule: rule.slice(0, 100) });
     }
 
     // 金克木：每 N 次交互触发熵减修剪
@@ -409,6 +418,13 @@ async function reflectionNode(state) {
                 }
             } catch { /* 静默 */ }
         });
+    }
+
+    // 反思完成 → 通知前端最终答案
+    const finalAnswer = lastAns || state.foundWisdom || "";
+    if (finalAnswer) {
+        agentBus.push(ET.ANSWER, "answer", finalAnswer.slice(0, 300),
+            { full: finalAnswer, rule });
     }
 
     return { status: "completed" };

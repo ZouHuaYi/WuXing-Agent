@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node main.js",
+    "web": "node server.js",
+    "web:dev": "node server.js & cd web && npm run dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
