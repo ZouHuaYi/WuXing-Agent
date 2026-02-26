@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "date": {
+      "type": "string",
+      "description": "出发日期，格式为'YYYY-MM-DD'"
+    }
+  },
+  "required": [
+    "date"
+  ]
+}

@@ -212,7 +212,8 @@ app.post("/api/command", async (req, res) => {
 });
 
 // ── SPA fallback ──────────────────────────────────────────
-app.get("*", (req, res) => {
+// Express 新版 router 不再支持裸 * 通配符，需用 /{*path}
+app.get("/{*path}", (req, res) => {
     const index = join(DIST, "index.html");
     if (existsSync(index)) {
         res.sendFile(index);

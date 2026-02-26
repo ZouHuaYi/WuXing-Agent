@@ -1,15 +1,14 @@
 # WuXing-Agent 状态看板
-> 由 Agent 自动维护，最后更新：2026/2/26 14:08:55
+> 由 Agent 自动维护，最后更新：2026/2/26 15:00:21
 
 ## 📅 实时感知
-- **时间**：2026/2/26 14:08:55（星期四）
+- **时间**：2026/2/26 15:00:21（星期四）
 - **平台**：win32 x64 | Node v22.22.0
-- **内存**：已用 21230 MB / 共 32590 MB
+- **内存**：已用 21888 MB / 共 32590 MB
 - **CPU 负载（1m）**：0.00
 
 ## 🛠️ 能力版图
-- **本地工具（11）**：read_file、list_dir、write_file、execute_code、list_workspace、test_runner、incorporate_skill、install_npm_package、get_datetime、get_system_info、random_number
-- **MCP 工具（20）**：everything__echo、everything__get-annotated-message、everything__get-env、everything__get-resource-links、everything__get-resource-reference、everything__get-structured-content、everything__get-sum、everything__get-tiny-image、everything__gzip-file-as-resource、everything__toggle-simulated-logging、everything__toggle-subscriber-updates、everything__trigger-long-running-operation、everything__simulate-research-query、tavily-search__tavily-search、tavily-search__tavily-extract、playwright-mcp__init-browser、playwright-mcp__get-full-dom、playwright-mcp__get-screenshot、playwright-mcp__execute-code、playwright-mcp__get-context
+- **本地工具（8）**：read_file、list_dir、write_file、execute_code、list_workspace、test_runner、incorporate_skill、install_npm_package
 
 ## 🎯 长期目标
 - **[HIGH] 学习并落地基于机器学习的BTC短线交易策略** 截止 2024-09-15
@@ -30,4 +29,4 @@
 - 暂无修复记录
 
 ---
-*自动生成 by WuXing-Agent · 2026/2/26 14:08:55*
+*自动生成 by WuXing-Agent · 2026/2/26 15:00:21*
