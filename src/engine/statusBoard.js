@@ -23,6 +23,7 @@ import cfg               from "../../config/wuxing.json" with { type: "json" };
 
 const STATUS_FILE  = resolve(process.cwd(), "STATUS.md");
 const DEFECTS_FILE = resolve(process.cwd(), "data/defects.json");
+const APPROVAL_AUDIT_FILE = resolve(process.cwd(), "data/audit/approvals.jsonl");
 const MAX_DEFECTS  = 20;
 const MAX_RESOLVED = 10;
 
@@ -46,6 +47,20 @@ function saveDefects(data) {
     const dir = dirname(DEFECTS_FILE);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(DEFECTS_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
+
+function loadApprovalAudits(limit = 5) {
+    if (!existsSync(APPROVAL_AUDIT_FILE)) return [];
+    try {
+        const raw = readFileSync(APPROVAL_AUDIT_FILE, "utf-8");
+        const lines = raw.split("\n").filter(Boolean);
+        const parsed = lines.map((line) => {
+            try { return JSON.parse(line); } catch { return null; }
+        }).filter(Boolean);
+        return parsed.slice(-limit).reverse();
+    } catch {
+        return [];
+    }
 }
 
 // ── 主类 ─────────────────────────────────────────────────
@@ -110,6 +125,11 @@ export class StatusBoard {
         this._writeFile();
     }
 
+    // 使用现有缓存重新写状态文件（用于异步审计追加后刷新）
+    touch() {
+        this._writeFile();
+    }
+
     // ── 返回适合注入 Prompt 的精简摘要 ─────────────────
     // maxChars 控制长度，防止 Token 爆炸
     getContext(maxChars = 600) {
@@ -143,6 +163,7 @@ export class StatusBoard {
         const data    = loadDefects();
         const active  = goalTracker.list("active");
         const skills  = this._skillList ?? [];
+        const approvals = loadApprovalAudits(5);
 
         const lines = [
             `# WuXing-Agent 状态看板`,
@@ -205,6 +226,20 @@ export class StatusBoard {
             }
         } else {
             lines.push("- 暂无修复记录");
+        }
+
+        lines.push("", "## 🛡️ 审批审计");
+        if (approvals.length > 0) {
+            for (const a of approvals) {
+                const action = a.actionType ?? "unknown_action";
+                const risk = a.risk ?? "unknown";
+                const decision = a.decision ?? "unknown";
+                const when = a.resolvedAt ?? a.createdAt ?? "";
+                const reason = a.reason ? `，原因：${String(a.reason).slice(0, 60)}` : "";
+                lines.push(`- [${risk}] ${action} → ${decision}（${when}）${reason}`);
+            }
+        } else {
+            lines.push("- 暂无审批记录");
         }
 
         lines.push("", "---", `*自动生成 by WuXing-Agent · ${snap.timestamp}*`);

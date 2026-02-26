@@ -32,6 +32,21 @@ export async function sendCommand(cmd) {
   return res.json();
 }
 
+export async function fetchPendingActions() {
+  const res = await fetch(`${BASE}/v1/pending-actions`);
+  if (!res.ok) throw new Error("获取审批队列失败");
+  return res.json();
+}
+
+export async function decideApproval(id, decision, patchedCommand = "", reason = "") {
+  const res = await fetch(`${BASE}/v1/approvals/${encodeURIComponent(id)}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, patchedCommand, reason }),
+  });
+  return res.json();
+}
+
 // SSE 订阅：返回关闭函数
 export function subscribeStream(onEvent) {
   const es = new EventSource(`${BASE}/stream`);

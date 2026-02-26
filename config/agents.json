@@ -1,6 +1,15 @@
 {
   "_comment": "多智能体角色配置 — Supervisor 模式",
   "maxIterations": 8,
+  "approvalPolicy": {
+    "_comment": "审批策略：autoApprove=true 表示该风险级别自动通过，不进入人工审批",
+    "riskRules": {
+      "low": { "autoApprove": true,  "timeoutMs": 30000,  "allowModify": false },
+      "medium": { "autoApprove": false, "timeoutMs": 60000,  "allowModify": true },
+      "high": { "autoApprove": false, "timeoutMs": 90000,  "allowModify": true },
+      "critical": { "autoApprove": false, "timeoutMs": 180000, "allowModify": false }
+    }
+  },
   "agents": {
     "Commander": {
       "element": "Earth",

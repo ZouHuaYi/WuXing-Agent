@@ -18,6 +18,7 @@ import { promisify } from "util";
 import { join, resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import cfg from "../../config/wuxing.json" with { type: "json" };
+import { approvalManager } from "./approvalManager.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -423,6 +424,22 @@ export const installNpmPackageTool = tool(
         }
 
         const flag = saveAs === "devDependency" ? "--save-dev" : "--save";
+        const installCmd = `npm install ${packageName} ${flag}`;
+
+        if (approvalManager.shouldRequest("high")) {
+            const approval = await approvalManager.requestApproval({
+                actionType: "install_dependency",
+                risk: "high",
+                command: installCmd,
+                message: `请求安装依赖：${packageName}（${saveAs}）`,
+                allowModify: false,
+                metadata: { source: "tool_install_npm_package", packageName, saveAs },
+            });
+
+            if (!approval.approved) {
+                return `【审批拒绝】未执行安装：${packageName}（${approval.reason || "未获批准"}）`;
+            }
+        }
 
         try {
             const { stdout, stderr } = await execFileAsync(

@@ -3,6 +3,7 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import ThoughtStream from "./components/ThoughtStream.jsx";
 import StatusPanel from "./components/StatusPanel.jsx";
 import WorkspaceExplorer from "./components/WorkspaceExplorer.jsx";
+import ApprovalGate from "./components/ApprovalGate.jsx";
 import { useSSE } from "./hooks/useSSE.js";
 import { LayoutPanelLeft, BrainCircuit, FolderCode, ChevronRight, ChevronLeft } from "lucide-react";
 
@@ -55,6 +56,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-gray-100 overflow-hidden">
+      <ApprovalGate thoughts={thoughts} />
       {/* ── 顶栏 ── */}
       <header className="shrink-0 flex items-center gap-3 px-4 py-2.5 border-b border-gray-800 bg-gray-950 z-10">
         <div className="flex items-center gap-2">

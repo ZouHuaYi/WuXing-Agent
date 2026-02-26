@@ -18,6 +18,7 @@ import { goalTracker }    from "./src/engine/goalTracker.js";
 import { statusBoard }    from "./src/engine/statusBoard.js";
 import { geneticEvolver } from "./src/engine/evolve.js";
 import { sessionManager } from "./src/engine/sessionManager.js";
+import { approvalManager } from "./src/engine/approvalManager.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import cfg from "./config/wuxing.json" with { type: "json" };
 
@@ -87,6 +88,73 @@ function resetRuntimeData({ clearWorkspace = true, clearGoals = true } = {}) {
     };
 }
 
+function classifyCommandRisk(cmd) {
+    const normalized = cmd.trim();
+    if (normalized.startsWith(":reset")) {
+        return { risk: "critical", actionType: "data_reset", message: "请求执行全量数据重置" };
+    }
+    if (normalized === ":evolve apply") {
+        return { risk: "critical", actionType: "mutate_architecture", message: "请求应用架构基因重构提案" };
+    }
+    if (normalized === ":goal reset") {
+        return { risk: "high", actionType: "goal_reset", message: "请求清空全部目标" };
+    }
+    if (normalized === ":evolve rollback") {
+        return { risk: "high", actionType: "mutate_architecture", message: "请求回滚核心架构文件" };
+    }
+    if (normalized.includes(" rm ") || normalized.includes(" del ") || normalized.includes(" rd ")) {
+        return { risk: "critical", actionType: "shell_execute", message: "疑似危险 shell 删除指令" };
+    }
+    return { risk: "low", actionType: "command", message: "常规命令" };
+}
+
+async function executeControlCommand(cmd) {
+    let result = "";
+
+    if (cmd === ":reload") {
+        await skillManager.refreshSkills?.();
+        result = `已重载技能（${skillManager.getAllTools().length} 个）`;
+    } else if (cmd === ":status") {
+        const allNames = skillManager.getAllTools().map((t) => t.name);
+        statusBoard.refresh(allNames);
+        result = statusBoard.getContext(800);
+    } else if (cmd === ":goals") {
+        result = await goalTracker.briefing();
+    } else if (cmd.startsWith(":status resolve ")) {
+        const keyword = cmd.slice(":status resolve ".length).trim();
+        const ok = statusBoard.resolveDefect(keyword);
+        result = ok ? `缺陷已标记修复：${keyword}` : `未找到匹配缺陷：${keyword}`;
+    } else if (cmd === ":evolve backup") {
+        const dest = geneticEvolver.backup("web_manual");
+        result = `备份完成：${dest}`;
+    } else if (cmd === ":evolve rollback") {
+        const r = geneticEvolver.rollback();
+        result = r.message;
+    } else if (cmd === ":evolve apply") {
+        const r = geneticEvolver.apply();
+        result = r.message;
+    } else if (cmd === ":goal reset") {
+        goalTracker.resetAll?.();
+        statusBoard.refresh(skillManager.getAllTools().map((t) => t.name));
+        result = "目标已清空";
+    } else if (cmd.startsWith(":reset")) {
+        const keepWorkspace = cmd.includes("--keep-workspace");
+        const keepGoals = cmd.includes("--keep-goals");
+        const r = resetRuntimeData({
+            clearWorkspace: !keepWorkspace,
+            clearGoals: !keepGoals,
+        });
+        result =
+            `重置完成：清理 ${r.removedCount} 个数据项，` +
+            `记忆库存 ${r.memoryCount}，目标${r.goalsCleared ? "已清空" : "保留"}，` +
+            `工作区${r.workspaceCleared ? "已清空" : "保留"}`;
+    } else {
+        result = `未知指令：${cmd}`;
+    }
+
+    return result;
+}
+
 // ── SSE：实时思维流 ──────────────────────────────────────
 //
 // 每个浏览器连接订阅 agentBus 的 * 事件，格式：text/event-stream
@@ -113,8 +181,7 @@ app.get("/api/stream", (req, res) => {
     });
 });
 
-// ── POST /api/chat：触发 Agent 推理 ──────────────────────
-app.post("/api/chat", async (req, res) => {
+async function handleThinkRequest(req, res) {
     const { message, sessionMessages = [] } = req.body;
     if (!message?.trim()) {
         return res.status(400).json({ error: "message 不能为空" });
@@ -145,7 +212,13 @@ app.post("/api/chat", async (req, res) => {
         console.error("[服务器] 推理异常：", e.message);
         res.status(500).json({ error: e.message });
     }
-});
+}
+
+// ── POST /api/chat：触发 Agent 推理 ──────────────────────
+app.post("/api/chat", handleThinkRequest);
+
+// v1 别名：think
+app.post("/api/v1/think", handleThinkRequest);
 
 // ── GET /api/status ───────────────────────────────────────
 app.get("/api/status", (req, res) => {
@@ -159,8 +232,31 @@ app.get("/api/status", (req, res) => {
     res.json({ markdown: md, defects, summary });
 });
 
+// v1 别名：system status
+app.get("/api/v1/system/status", (req, res) => {
+    const STATUS_FILE = resolve(process.cwd(), "STATUS.md");
+    const DEFECTS_FILE = resolve(process.cwd(), "data/defects.json");
+    const md      = existsSync(STATUS_FILE)  ? readFileSync(STATUS_FILE, "utf-8")  : "";
+    const defects = existsSync(DEFECTS_FILE) ? JSON.parse(readFileSync(DEFECTS_FILE, "utf-8")) : { open: [], resolved: [] };
+    const summary = statusBoard.getContext(600);
+    res.json({ markdown: md, defects, summary });
+});
+
 // ── GET /api/skills ───────────────────────────────────────
 app.get("/api/skills", async (req, res) => {
+    await skillManager.refreshSkills?.();
+    const tools = skillManager.getAllTools();
+    res.json({
+        count: tools.length,
+        skills: tools.map((t) => ({
+            name:        t.name,
+            description: t.description?.slice(0, 120) ?? "",
+        })),
+    });
+});
+
+// v1 别名：skills
+app.get("/api/v1/skills", async (req, res) => {
     await skillManager.refreshSkills?.();
     const tools = skillManager.getAllTools();
     res.json({
@@ -240,52 +336,53 @@ app.post("/api/reset", (req, res) => {
     }
 });
 
+app.get("/api/pending-actions", (req, res) => {
+    res.json({ items: approvalManager.listPending() });
+});
+
+app.get("/api/v1/pending-actions", (req, res) => {
+    res.json({ items: approvalManager.listPending() });
+});
+
+app.get("/api/v1/approval-policy", (req, res) => {
+    res.json(approvalManager.getPolicy());
+});
+
+app.post("/api/v1/approvals/:id/decision", (req, res) => {
+    const { id } = req.params;
+    const { decision, patchedCommand = "", reason = "" } = req.body ?? {};
+    if (!decision) return res.status(400).json({ error: "decision 不能为空" });
+    const r = approvalManager.resolveDecision(id, { decision, patchedCommand, reason });
+    if (!r.ok) return res.status(404).json({ error: r.error });
+    res.json(r);
+});
+
 // ── POST /api/command — REPL 指令封装 ────────────────────
 app.post("/api/command", async (req, res) => {
     const { cmd } = req.body;
     if (!cmd) return res.status(400).json({ error: "cmd 不能为空" });
 
     try {
-        let result = "";
+        const riskMeta = classifyCommandRisk(cmd);
+        let effectiveCmd = cmd;
+        let approval = null;
 
-        if (cmd === ":reload") {
-            await skillManager.refreshSkills?.();
-            result = `已重载技能（${skillManager.getAllTools().length} 个）`;
-        } else if (cmd === ":status") {
-            const allNames = skillManager.getAllTools().map((t) => t.name);
-            statusBoard.refresh(allNames);
-            result = statusBoard.getContext(800);
-        } else if (cmd === ":goals") {
-            result = await goalTracker.briefing();
-        } else if (cmd.startsWith(":status resolve ")) {
-            const keyword = cmd.slice(":status resolve ".length).trim();
-            const ok = statusBoard.resolveDefect(keyword);
-            result = ok ? `缺陷已标记修复：${keyword}` : `未找到匹配缺陷：${keyword}`;
-        } else if (cmd === ":evolve backup") {
-            const dest = geneticEvolver.backup("web_manual");
-            result = `备份完成：${dest}`;
-        } else if (cmd === ":evolve rollback") {
-            const r = geneticEvolver.rollback();
-            result = r.message;
-        } else if (cmd === ":goal reset") {
-            goalTracker.resetAll?.();
-            statusBoard.refresh(skillManager.getAllTools().map((t) => t.name));
-            result = "目标已清空";
-        } else if (cmd.startsWith(":reset")) {
-            const keepWorkspace = cmd.includes("--keep-workspace");
-            const keepGoals = cmd.includes("--keep-goals");
-            const r = resetRuntimeData({
-                clearWorkspace: !keepWorkspace,
-                clearGoals: !keepGoals,
+        if (approvalManager.shouldRequest(riskMeta.risk)) {
+            approval = await approvalManager.requestApproval({
+                actionType: riskMeta.actionType,
+                risk: riskMeta.risk,
+                command: cmd,
+                message: riskMeta.message,
+                allowModify: true,
+                metadata: { source: "web_command" },
             });
-            result =
-                `重置完成：清理 ${r.removedCount} 个数据项，` +
-                `记忆库存 ${r.memoryCount}，目标${r.goalsCleared ? "已清空" : "保留"}，` +
-                `工作区${r.workspaceCleared ? "已清空" : "保留"}`;
-        } else {
-            result = `未知指令：${cmd}`;
+            if (!approval.approved) {
+                return res.json({ result: `操作已拒绝：${approval.reason || "未获批准"}`, approval });
+            }
+            effectiveCmd = approval.command || cmd;
         }
 
+        const result = await executeControlCommand(effectiveCmd);
         res.json({ result });
     } catch (e) {
         res.status(500).json({ error: e.message });
