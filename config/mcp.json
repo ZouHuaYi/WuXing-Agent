@@ -8,6 +8,28 @@
         "-y",
         "@modelcontextprotocol/server-everything"
       ]
+    },
+    "tavily-search": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "tavily-mcp@0.1.3"
+      ],
+      "env": {
+        "TAVILY_API_KEY": "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"
+      }
+    },
+    "playwright-mcp": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "playwright-mcp",
+        "--version"
+      ]
     }
   }
 }

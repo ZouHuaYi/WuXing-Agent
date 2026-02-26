@@ -8,7 +8,7 @@
 import "dotenv/config";
 import readline from "readline";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { app, wisdomMemory, vectorMemory } from "./src/engine/wuxingGraph.js";
+import { app, wisdomMemory, vectorMemory, skillWriter } from "./src/engine/wuxingGraph.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -80,6 +80,8 @@ async function initSystem() {
     console.log("    :team [任务]           - 团队模式（Commander 调度 Executor + Researcher 协作）");
     console.log("    :pin  <准则>           - 钉住核心记忆（永不裁剪）");
     console.log("    :mem                  - 查看分层记忆统计（core/long_term/short_term）");
+    console.log("    :grow <任务> <解法>    - 手动触发技能封装（自生长）");
+    console.log("    :see  [路径]           - 视觉感知（同 :v，别名）");
     console.log("");
     console.log("    :c                    - 清除当前会话上下文");
     console.log("    exit                  - 安全退出并保存记忆");
@@ -158,7 +160,12 @@ async function handleChat(input) {
     console.log(`\n[感知] 正在进行五行推演... (上下文 ${sessionMessages.length} 条)\n`);
 
     try {
-        const result = await app.invoke({ messages: contextMessages });
+        // recursionLimit = maxCycles × 2（reasoning↔tools 每轮2跳）+ 固定节点数（water/intuition/reflection = 3）+ 缓冲
+        const maxCycles = cfg.tools?.maxCycles ?? 12;
+        const result = await app.invoke(
+            { messages: contextMessages },
+            { recursionLimit: maxCycles * 2 + 10 }
+        );
 
         const answer = result.foundWisdom
             ?? result.messages[result.messages.length - 1]?.content;
@@ -175,6 +182,16 @@ async function handleChat(input) {
         // 更新会话窗口（将本轮存入上下文）
         if (answer) {
             pushSession(humanMsg, new AIMessage(answer));
+        }
+
+        // 短期记忆：将本轮对话写入 short_term 层（语义可搜索，1天后降权）
+        if (answer && input.length > 10) {
+            setImmediate(async () => {
+                await vectorMemory.add(input, answer, {
+                    confidence:   0.5,
+                    memory_type:  "short_term",
+                });
+            });
         }
 
         // 异步微进化：不阻塞主循环，让用户立即看到提示符
@@ -424,6 +441,34 @@ function showLayeredMemoryStats() {
     console.log(`${DIVIDER}\n`);
 }
 
+/**
+ * :grow <任务描述> | <解法描述>
+ * 手动触发技能封装。用 "|" 分隔任务和解法。
+ * 示例：:grow 计算斐波那契数列 | 用迭代法避免递归栈溢出，时间复杂度 O(n)
+ */
+async function handleGrow(argStr) {
+    const parts    = argStr.split("|").map((s) => s.trim());
+    const task     = parts[0];
+    const solution = parts[1];
+
+    if (!task || !solution) {
+        console.log("\n[木-自生长] 用法：:grow <任务> | <解法>");
+        console.log("  示例：:grow 批量重命名文件 | 用 path.basename 提取名称，再 fs.rename 替换\n");
+        return;
+    }
+
+    console.log(`\n[木-自生长] 正在评估封装价值...（分数阈值：${85}）`);
+    const result = await skillWriter.tryWrite(task, solution, 90);  // 手动触发时强制 score=90
+
+    if (result.created) {
+        console.log(`[木-自生长] 技能已生成：skills/${result.skillName}/`);
+        console.log(`[木-自生长] 使用 :reload 确认加载，或 :skills 查看详情\n`);
+        logger.info(EV.WOOD, `手动自生长：${result.skillName}`);
+    } else {
+        console.log("[木-自生长] LLM 判定此任务不适合封装为通用技能（或已存在同名技能）\n");
+    }
+}
+
 // ─────────────────────────────────────────────
 // 团队协作处理器
 // ─────────────────────────────────────────────
@@ -572,6 +617,8 @@ rl.on("line", async (line) => {
         case ":team":     await handleTeam(arg);              break;
         case ":pin":      await handlePinMemory(arg);         break;
         case ":mem":      showLayeredMemoryStats();            break;
+        case ":grow":     await handleGrow(arg);               break;
+        case ":see":      await handleVision(arg);             break;  // :v 别名
         default:          await handleChat(input);            break;
     }
 

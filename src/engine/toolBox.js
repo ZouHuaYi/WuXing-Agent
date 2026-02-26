@@ -1,12 +1,14 @@
 // src/engine/toolBox.js
-// 【火-工具箱】：Agent 的"手脚"—— 文件读写 + 代码执行
+// 【火-工具箱】：Agent 的"手脚"—— 文件读写 + 代码执行 + 自进化
 //
 // 安全边界（金之约束）：
-//   read_file       — 只允许读取项目根目录内的文件
-//   write_file      — 只允许写入 workspace/ 目录（Agent 的合法道场）
-//   execute_code    — 子进程运行，带超时，stdout/stderr 截断
-//   list_workspace  — 展示 workspace/ 现有产出，水层启动感知
-//   list_dir        — 探索项目结构（只读）
+//   read_file          — 读取项目根目录内的任意文件（含配置、技能定义）
+//   write_file         — 只允许写入 workspace/ 目录（Agent 的合法道场）
+//   execute_code       — 子进程运行，带超时，stdout/stderr 截断
+//   list_workspace     — 展示 workspace/ 现有产出，水层启动感知
+//   list_dir           — 探索项目结构（只读）
+//   incorporate_skill  — 将 workspace/ 中测试通过的代码提升为正式技能卡
+//   install_npm_package— 按需安装 npm 包（受包名格式限制，禁止全局安装）
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { readFile, writeFile, readdir, mkdir, unlink, stat } from "fs/promises";
@@ -49,7 +51,15 @@ export const readFileTool = tool(
     },
     {
         name: "read_file",
-        description: "读取项目根目录内的文件内容。路径相对于项目根目录，如 'src/engine/wuxingGraph.js' 或 'package.json'。",
+        description:
+            "读取项目根目录内的任意文件内容。路径相对于项目根目录。\n" +
+            "可读取的关键文件包括：\n" +
+            "  config/mcp.json        — MCP 服务配置\n" +
+            "  config/wuxing.json     — 系统参数\n" +
+            "  config/agents.json     — 角色定义\n" +
+            "  skills/*/SKILL.md      — 技能卡定义\n" +
+            "  package.json           — 依赖列表\n" +
+            "  workspace/<文件名>     — 自己写的代码",
         schema: z.object({
             path:     z.string().describe("相对于项目根目录的文件路径"),
             maxChars: z.number().optional().describe("最多返回的字符数，默认 4000"),
@@ -297,6 +307,157 @@ export const testRunnerTool = tool(
     }
 );
 
+// ── 工具 7：内化技能（workspace → skills/ 正式技能卡）────
+//
+// 将 workspace/ 中测试通过的 handler 文件提升为标准目录型技能卡：
+//   skills/{name}/SKILL.md
+//   skills/{name}/schema.json
+//   skills/{name}/scripts/index.js
+//
+// 提升后自动触发 skillManager.refreshSkills() 热加载。
+export const incorporateSkillTool = tool(
+    async ({ name, sourceFile, description, parametersJson }) => {
+        // ── 名称合规检查 ──
+        if (!/^[a-z][a-z0-9_]{1,39}$/.test(name)) {
+            return `【错误】技能名 "${name}" 不合规（只允许小写字母/数字/下划线，长度 2-40）`;
+        }
+
+        const srcPath  = join(WORKSPACE_DIR, basename(sourceFile));
+        if (!existsSync(srcPath)) {
+            return `【错误】源文件不存在：${srcPath}\n请先用 write_file 写入并用 test_runner 验证。`;
+        }
+
+        const skillsRoot = join(PROJECT_ROOT, "skills");
+        const skillDir   = join(skillsRoot, name);
+        const scriptsDir = join(skillDir, "scripts");
+
+        if (existsSync(skillDir)) {
+            return `【跳过】技能 ${name} 已存在：${skillDir}\n如需覆盖，请先手动删除该目录。`;
+        }
+
+        try {
+            await mkdir(scriptsDir, { recursive: true });
+
+            // SKILL.md
+            const skillMd = [
+                `---`,
+                `name: ${name}`,
+                `description: ${description}`,
+                `---`,
+                ``,
+                `# ${name}`,
+                ``,
+                `> 由 Agent 自动内化（incorporate_skill）`,
+                ``,
+                `## 来源`,
+                ``,
+                `workspace/${basename(sourceFile)}`,
+            ].join("\n");
+
+            // schema.json（从 parametersJson 参数解析，默认空对象）
+            let schema = { type: "object", properties: {}, required: [] };
+            if (parametersJson) {
+                try { schema = JSON.parse(parametersJson); } catch { /* 用默认值 */ }
+            }
+
+            const handlerCode = await readFile(srcPath, "utf-8");
+
+            await writeFile(join(skillDir, "SKILL.md"),        skillMd,                      "utf-8");
+            await writeFile(join(skillDir, "schema.json"),     JSON.stringify(schema, null, 2), "utf-8");
+            await writeFile(join(scriptsDir, "index.js"),      handlerCode,                  "utf-8");
+
+            // 热加载：动态导入 skillManager（避免模块加载时的循环依赖）
+            try {
+                const { skillManager } = await import("./skillManager.js");
+                await skillManager.refreshSkills();
+            } catch { /* main.js 中 skillManager 会在下次 :reload 时刷新 */ }
+
+            return [
+                `【内化成功】技能已写入 skills/${name}/`,
+                `  SKILL.md      — 技能定义`,
+                `  schema.json   — 参数规格`,
+                `  scripts/index.js — 处理逻辑（来自 workspace/${basename(sourceFile)}）`,
+                `技能已热加载，可立即在对话中调用。`,
+            ].join("\n");
+
+        } catch (e) {
+            return `【内化失败】${e.message}`;
+        }
+    },
+    {
+        name: "incorporate_skill",
+        description:
+            "将 workspace/ 中测试通过的 Node.js 文件提升为正式目录型技能卡（skills/{name}/）并自动热加载。\n" +
+            "必须先用 test_runner 验证代码无误，再调用此工具完成自进化闭环。\n" +
+            "sourceFile 中必须包含 export async function handler(args){} 或兼容的导出。",
+        schema: z.object({
+            name:           z.string().describe("技能标识符（snake_case，如 fetch_btc_price）"),
+            sourceFile:     z.string().describe("workspace/ 中的源文件名（如 btc_fetcher.js）"),
+            description:    z.string().describe("技能描述（第三人称，说明 WHAT + WHEN，≤120字符）"),
+            parametersJson: z.string().optional().describe(
+                "可选：JSON Schema 字符串，描述 handler 的输入参数。默认为空对象 schema。"
+            ),
+        }),
+    }
+);
+
+// ── 工具 8：按需安装 npm 包 ────────────────────────────
+//
+// 安全限制：
+//   - 包名必须符合 npm 命名规范（防注入）
+//   - 禁止 --global 和其他危险标志
+//   - 超时 120s（npm 网络慢时需要时间）
+const NPM_NAME_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[\d.]+)?$/;
+
+export const installNpmPackageTool = tool(
+    async ({ packageName, saveAs = "dependency" }) => {
+        if (!NPM_NAME_RE.test(packageName)) {
+            return `【拒绝】包名 "${packageName}" 格式非法（防注入保护）`;
+        }
+
+        const flag = saveAs === "devDependency" ? "--save-dev" : "--save";
+
+        try {
+            const { stdout, stderr } = await execFileAsync(
+                "npm",
+                ["install", packageName, flag],
+                {
+                    timeout:   120_000,
+                    cwd:       PROJECT_ROOT,
+                    env:       { ...process.env },
+                    maxBuffer: 256 * 1024,
+                    shell:     true,   // Windows 下 npm 是 .cmd 脚本，需要 shell
+                }
+            );
+
+            const out = (stdout || "").trim().slice(0, 1000);
+            const err = (stderr || "").trim().slice(0, 400);
+            return [
+                `【安装成功】${packageName}`,
+                out ? `输出：${out}` : "",
+                err ? `警告：${err}` : "",
+            ].filter(Boolean).join("\n");
+
+        } catch (e) {
+            const msg = e.killed ? "安装超时（>120s）" : e.message.slice(0, 300);
+            const err = (e.stderr ?? "").slice(0, 400);
+            return `【安装失败】${packageName}\n${msg}${err ? `\n${err}` : ""}`;
+        }
+    },
+    {
+        name: "install_npm_package",
+        description:
+            "按需安装 npm 包到项目依赖。安装后可在 workspace/ 代码中 require/import 使用。\n" +
+            "示例：install axios 后，workspace 代码可直接 import axios from 'axios'。\n" +
+            "限制：包名必须符合 npm 命名规范；不允许全局安装。",
+        schema: z.object({
+            packageName: z.string().describe("npm 包名，如 'axios' 或 '@scope/package'"),
+            saveAs:      z.enum(["dependency", "devDependency"]).optional()
+                          .describe("保存类型：dependency（默认）或 devDependency"),
+        }),
+    }
+);
+
 export const ALL_TOOLS = [
     readFileTool,
     listDirTool,
@@ -304,4 +465,6 @@ export const ALL_TOOLS = [
     executeCodeTool,
     listWorkspaceTool,
     testRunnerTool,
+    incorporateSkillTool,
+    installNpmPackageTool,
 ];

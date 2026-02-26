@@ -41,7 +41,7 @@
   "tool_category_map": {
     "read":      ["read_file", "list_dir"],
     "file":      ["read_file", "list_dir", "write_file", "list_workspace"],
-    "code":      ["execute_code", "test_runner"],
+    "code":      ["execute_code", "test_runner", "incorporate_skill", "install_npm_package"],
     "shell":     [],
     "knowledge": []
   }

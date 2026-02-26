@@ -10,6 +10,7 @@ import { END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { WisdomMemory } from "./vectorStore.js";
 import { VectorMemory } from "../memory/vectorMemory.js";
+import { SkillWriter }  from "./skillWriter.js";
 import { sense } from "./waterSensor.js";
 import { prune } from "./entropyReducer.js";
 import { WORKSPACE_DIR } from "./toolBox.js";
@@ -33,7 +34,8 @@ const llmBase = new ChatOpenAI({
 });
 
 export const wisdomMemory  = new WisdomMemory();
-export const vectorMemory  = new VectorMemory(wisdomMemory);  // 分层召回封装层
+export const vectorMemory  = new VectorMemory(wisdomMemory);
+export const skillWriter   = new SkillWriter(skillManager);  // 自写技能触发器
 
 // 进化计数器（进程生命周期内有效）
 let interactionCount = 0;
@@ -45,10 +47,28 @@ const AgentState = {
     messages:           { value: (x, y) => x.concat(y), default: () => [] },
     environmentContext: { value: (_, y) => y,           default: () => null },
     foundWisdom:        { value: (_, y) => y,           default: () => null },
+    // 直觉命中但不应绕过推理时，将经验作为"策略提示"注入推理层
+    wisdomHint:         { value: (_, y) => y,           default: () => null },
     status:             { value: (_, y) => y,           default: () => ""   },
     // 累计调用轮次：节点已自行做加法，归约器直接替换即可
     toolCallCycles:     { value: (_, y) => y,           default: () => 0    },
 };
+
+// ── 直觉旁路豁免检测 ─────────────────────────────────────
+// 以下场景，即使命中经验库，也必须透传到推理层执行：
+//   1. 实时数据类：用户需要当前/今天/最新的事实，缓存经验无法替代
+//   2. 行动构建类：用户要求执行、搭建、整合、写代码等操作
+// 返回 true 表示"必须绕过直觉短路，强制走推理"
+const LIVE_DATA_WORDS  = /今天|今日|现在|当前|最新|实时|此刻|刚才|刚刚|今晚|今早/;
+const ACTION_WORDS     = /帮我查|搜索|查询一下|查一下|整合|搭建|创建|写一个|开发|实现|配置|安装|集成|获取|拉取/;
+
+function requiresExecution(query, ctx) {
+    // 水层已识别出时序信息，说明问题时效性强
+    if (ctx?.temporalHints) return true;
+    if (LIVE_DATA_WORDS.test(query))  return true;
+    if (ACTION_WORDS.test(query))     return true;
+    return false;
+}
 
 // ─────────────────────────────────────────────
 // 【水】：环境感知节点 —— 解析情绪、语气、时序
@@ -71,14 +91,26 @@ async function waterNode(state) {
 // ─────────────────────────────────────────────
 async function intuitionNode(state) {
     const lastInput = state.messages[state.messages.length - 1].content;
-    const wisdom = await wisdomMemory.recall(lastInput);
+    const ctx       = state.environmentContext;
+    const wisdom    = await wisdomMemory.recall(lastInput);
 
-    if (wisdom) {
-        logger.info(EV.FIRE, "因果律命中，直接输出");
-        return { foundWisdom: wisdom, status: "completed" };
+    if (!wisdom) {
+        logger.info(EV.FIRE, "经验库未覆盖，转交土层...");
+        return { status: "reasoning", wisdomHint: null };
     }
-    logger.info(EV.FIRE, "经验库未覆盖，转交土层...");
-    return { status: "reasoning" };
+
+    // 命中经验库，但需要判断是否应该绕过推理
+    if (requiresExecution(lastInput, ctx)) {
+        // 实时数据 / 行动类查询：将经验作为策略提示注入推理层，不直接返回
+        logger.info(EV.FIRE,
+            "经验库命中（策略提示），但查询需要实时执行，透传推理层..."
+        );
+        return { wisdomHint: wisdom, status: "reasoning" };
+    }
+
+    // 纯知识型查询（无时效、无操作），直接复用缓存经验
+    logger.info(EV.FIRE, "因果律命中，直接输出");
+    return { foundWisdom: wisdom, wisdomHint: null, status: "completed" };
 }
 
 // ─────────────────────────────────────────────
@@ -116,13 +148,26 @@ async function reasoningNode(state) {
           "以上经验仅供参考，请结合当前问题判断是否适用。"
         : "";
 
+    // 【火-直觉透传】直觉层命中但需要实时执行的经验，作为策略提示注入
+    const hintSection = state.wisdomHint
+        ? `\n\n【直觉策略提示（请参考，但必须实际执行查询/操作）】\n${state.wisdomHint}`
+        : "";
+
     let systemPrompt =
-        "你是具备 MCP 权限的 WuXing 编程专家，可以调用工具来读写文件并执行代码。\n" +
-        "工作流程：list_dir 探路 → read_file 精读 → write_file 写入 → test_runner 验证 → execute_code 运行。\n" +
-        "写完代码后，必须调用 test_runner 进行验证；若测试失败，根据错误报告修复代码，再次验证，形成自愈闭环。\n" +
+        "你是具备五行自进化能力的 WuXing 编程专家，可以调用工具读写文件、执行代码、并将成果内化为永久技能。\n" +
+        "\n" +
+        "【标准编程工作流】\n" +
+        "  1. list_dir / read_file  — 探路与读取（含 config/mcp.json、config/wuxing.json、skills/*/SKILL.md 等配置）\n" +
+        "  2. write_file            — 写入 workspace/\n" +
+        "  3. test_runner           — 验证；失败则修复，再验，形成自愈闭环\n" +
+        "  4. incorporate_skill     — 测试通过且有复用价值时，将代码提升为 skills/ 正式技能卡并热加载\n" +
+        "\n" +
+        "【按需装依赖】代码需要第三方包时，先调用 install_npm_package 安装，再写代码。\n" +
+        "【自进化原则】测试通过的有价值代码必须调用 incorporate_skill 完成内化，而非仅留在 workspace/。\n" +
         "工具调用完成后，综合结果给出最终答案，并提炼因果准则。" +
         wsContext +
-        memSection;
+        memSection +
+        hintSection;
 
     if (ctx?.urgency > 0.7) {
         systemPrompt += "\n用户情绪较为紧迫，请直接给出最核心的3条建议，每条不超过30字。";
@@ -270,6 +315,15 @@ async function reflectionNode(state) {
             logger.info(EV.METAL,
                 `因果评审通过 ${tag}[${score}分 ≥ ${threshold}] | 适用:${parsed.applicability} | 因果强度:${parsed.causal_strength}`
             );
+
+            // 【木-自生长】分数足够高时，异步尝试封装为目录型技能卡
+            // 用 setImmediate 确保不阻塞当前节点返回
+            setImmediate(async () => {
+                const { created, skillName } = await skillWriter.tryWrite(userTask, lastAns, score);
+                if (created) {
+                    console.log(`\n[木-自生长] 新技能已种下：skills/${skillName}/  ← 可用 :skills 查看`);
+                }
+            });
         } else if (!parsed.rule) {
             logger.info(EV.METAL, "审计：无可提炼的通用准则，跳过入库。");
         } else {

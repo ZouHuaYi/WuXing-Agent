@@ -34,9 +34,10 @@
   },
 
   "reflection": {
-    "_comment":          "金节点质量门禁：通用准则 >= qualityThreshold；安全防御模式 >= securityThreshold（更易入库）",
+    "_comment":          "金节点质量门禁：qualityThreshold 入内丹；securityThreshold 安全场景更宽松；skillThreshold 触发自写技能",
     "qualityThreshold":  72,
-    "securityThreshold": 52
+    "securityThreshold": 52,
+    "skillThreshold":    85
   },
 
   "evolution": {
@@ -51,8 +52,8 @@
 
   "tools": {
     "_comment":           "火节点工具调用：maxCycles 防无限循环，executionTimeoutMs 工作区超时",
-    "maxCycles":          5,
-    "executionTimeoutMs": 10000,
+    "maxCycles":          25,
+    "executionTimeoutMs": 30000,
     "workspaceDir":       "workspace"
   },
 
