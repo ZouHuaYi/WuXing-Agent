@@ -10,6 +10,7 @@ import readline from "readline";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { app, wisdomMemory, vectorMemory, skillWriter } from "./src/engine/wuxingGraph.js";
 import { sessionManager } from "./src/engine/sessionManager.js";
+import { goalTracker }   from "./src/engine/goalTracker.js";
 import { VisionModule } from "./src/engine/vision.js";
 import { EvolutionPlugin } from "./src/plugins/evolution/index.js";
 import { WuxingDebate } from "./src/engine/debate.js";
@@ -90,6 +91,8 @@ async function initSystem() {
     console.log("");
     console.log("    :c                    - 清除会话上下文（内存 + 磁盘）");
     console.log("    :history              - 查看持久化会话状态（轮数、字符、是否已摘要）");
+    console.log("    :vision <愿景描述>    - 输入长期愿景，AI 自动拆解为里程碑计划");
+    console.log("    :goal <子指令>        - 长期目标管理（add/list/done/complete/briefing）");
     console.log("    exit                  - 安全退出并保存记忆");
     console.log(DOUBLE_DIVIDER);
 
@@ -156,6 +159,16 @@ async function initSystem() {
 
     logger.info(EV.SYSTEM, `后台梦境定时器已启动，周期 ${intervalMs / 60000} 分钟`);
     console.log(`[系统] 后台进化定时器已启动（每 ${intervalMs / 60000} 分钟自动梦境折叠）\n`);
+
+    // 神-意志：启动晨报 — 展示活跃目标，给 Agent 一个持续的方向感
+    const activeGoals = goalTracker.list("active");
+    if (activeGoals.length > 0) {
+        const briefing = await goalTracker.briefing();
+        console.log(DOUBLE_DIVIDER);
+        console.log(briefing);
+        console.log(DOUBLE_DIVIDER);
+        console.log();
+    }
 
     rl.prompt();
 }
@@ -593,6 +606,131 @@ function clearSession() {
     console.log("\n[系统] 会话上下文已清除（内存 + 磁盘），开始全新对话\n");
 }
 
+// ── :vision 指令处理器 ───────────────────────────────────
+// 将一段自然语言愿景拆解为结构化目标 + 里程碑，写入 goals.json
+async function handleVision2(arg) {
+    if (!arg.trim()) {
+        console.log([
+            "",
+            "用法：:vision <愿景描述>",
+            "示例：:vision 学习并实现一个基于机器学习的 BTC 短线波段模型，7天内完成模拟回测",
+            "",
+        ].join("\n"));
+        return;
+    }
+
+    console.log("\n[神-意志] 正在拆解愿景，生成里程碑计划...\n");
+
+    try {
+        const { goal, todayTask } = await goalTracker.decompose(arg);
+
+        console.log(`[神-意志] 愿景已种下：${goal.title}`);
+        console.log(`  ID       : ${goal.id}`);
+        console.log(`  截止日期 : ${goal.deadline ?? "未设定"}`);
+        console.log(`  优先级   : ${goal.priority}`);
+        if (goal.milestones.length > 0) {
+            console.log(`  里程碑（${goal.milestones.length} 个）：`);
+            goal.milestones.forEach((ms, i) => {
+                console.log(`    ${i + 1}. ${ms.title}`);
+            });
+        }
+        if (todayTask) {
+            console.log(`\n[火-直觉] 今日第一步：${todayTask}`);
+        }
+        console.log();
+    } catch (e) {
+        console.log(`\n[错误] 愿景拆解失败：${e.message}\n`);
+    }
+}
+
+// ── :goal 指令处理器 ─────────────────────────────────────
+async function handleGoal(arg) {
+    const parts   = arg.trim().split(/\s+/);
+    const sub     = parts[0] ?? "";
+    const rest    = parts.slice(1).join(" ");
+
+    switch (sub) {
+        // :goal add <标题> [| <描述> [| <截止日期 YYYY-MM-DD>]]
+        case "add": {
+            if (!rest) {
+                console.log("\n用法：:goal add <标题> [| <描述>] [| <截止日期>]\n  示例：:goal add 量化交易系统 | 实现自动化交易 | 2026-12-31\n");
+                return;
+            }
+            const segments    = rest.split("|").map((s) => s.trim());
+            const title       = segments[0];
+            const description = segments[1] ?? "";
+            const deadline    = segments[2] ?? null;
+            const goal = goalTracker.add({ title, description, deadline });
+            console.log(`\n[神-意志] 目标已种下：${goal.title}\n  ID：${goal.id}\n`);
+            break;
+        }
+
+        // :goal list [active|paused|completed]
+        case "list":
+        case "ls": {
+            const status = rest || null;
+            console.log(`\n[神-意志] 目标总览\n`);
+            console.log(goalTracker.format(status));
+            console.log();
+            break;
+        }
+
+        // :goal advance <id> <delta> <说明>
+        case "advance":
+        case "done": {
+            // :goal done <id> <说明>  →  +10 进度
+            const id     = parts[1] ?? "";
+            const delta  = sub === "done" ? 10 : (parseInt(parts[2], 10) || 5);
+            const note   = sub === "done"
+                ? parts.slice(2).join(" ")
+                : parts.slice(3).join(" ");
+            const goal = goalTracker.advance(id, note || "手动推进", delta);
+            if (!goal) { console.log(`\n[神-意志] 找不到目标 ${id}\n`); return; }
+            console.log(`\n[神-意志] 进度已更新：${goal.title} → ${goal.progress}%\n`);
+            break;
+        }
+
+        // :goal complete <id>
+        case "complete": {
+            const id = parts[1];
+            goalTracker.complete(id);
+            const g = goalTracker.get(id);
+            console.log(`\n[神-意志] 目标达成：${g?.title ?? id}\n`);
+            break;
+        }
+
+        // :goal pause <id>
+        case "pause": {
+            goalTracker.pause(parts[1]);
+            console.log(`\n[神-意志] 目标已暂停\n`);
+            break;
+        }
+
+        // :goal briefing  →  生成今日使命提示
+        case "briefing":
+        case "brief": {
+            const b = await goalTracker.briefing();
+            console.log(b ? `\n${b}\n` : "\n当前没有活跃目标。\n");
+            break;
+        }
+
+        default: {
+            console.log([
+                "",
+                "[神-意志] :goal 子指令：",
+                "  :goal add <标题> [| <描述>] [| <截止日期>]  — 添加长期目标",
+                "  :goal list [active|completed|paused]         — 查看目标",
+                "  :goal done <id> [说明]                       — 推进 +10% 进度",
+                "  :goal advance <id> <delta> [说明]            — 指定增量推进",
+                "  :goal complete <id>                          — 标记完成",
+                "  :goal pause <id>                             — 暂停",
+                "  :goal briefing                               — 今日使命晨报",
+                "",
+            ].join("\n"));
+        }
+    }
+}
+
 function showHistory() {
     const s = sessionManager.stats(sessionMessages);
     console.log(`\n[水-会话] 持久化状态`);
@@ -630,6 +768,8 @@ rl.on("line", async (line) => {
         case ":m":       showMemoryStatus();                 break;
         case ":c":       clearSession();                     break;
         case ":history": showHistory();                     break;
+        case ":goal":    await handleGoal(arg);             break;
+        case ":vision":  await handleVision2(arg);          break;
         case ":w":
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;

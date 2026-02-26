@@ -15,6 +15,7 @@ import { sense } from "./waterSensor.js";
 import { prune } from "./entropyReducer.js";
 import { WORKSPACE_DIR } from "./toolBox.js";
 import { skillManager } from "./skillManager.js";
+import { goalTracker }  from "./goalTracker.js";
 import { readdir } from "fs/promises";
 import { existsSync } from "fs";
 import cfg from "../../config/wuxing.json" with { type: "json" };
@@ -153,6 +154,12 @@ async function reasoningNode(state) {
         ? `\n\n【直觉策略提示（请参考，但必须实际执行查询/操作）】\n${state.wisdomHint}`
         : "";
 
+    // 【神-意志注入】将活跃目标写入系统提示，给推理层持续的方向感
+    const goalBriefing = await goalTracker.briefing();
+    const goalSection  = goalBriefing
+        ? `\n\n${goalBriefing}`
+        : "";
+
     let systemPrompt =
         "你是具备五行自进化能力的 WuXing 编程专家，可以调用工具读写文件、执行代码、并将成果内化为永久技能。\n" +
         "\n" +
@@ -167,7 +174,8 @@ async function reasoningNode(state) {
         "工具调用完成后，综合结果给出最终答案，并提炼因果准则。" +
         wsContext +
         memSection +
-        hintSection;
+        hintSection +
+        goalSection;
 
     if (ctx?.urgency > 0.7) {
         systemPrompt += "\n用户情绪较为紧迫，请直接给出最核心的3条建议，每条不超过30字。";
@@ -354,6 +362,22 @@ async function reflectionNode(state) {
     if (interactionCount % cfg.memory.entropyTriggerEvery === 0) {
         logger.info(EV.ENTROPY, `第 ${interactionCount} 次交互，触发定期熵减...`);
         await prune(wisdomMemory);
+    }
+
+    // 神-意志：反思完成后，异步检查本次任务是否推进了长期目标（不阻塞主流程）
+    if (lastAns) {
+        setImmediate(async () => {
+            try {
+                const advanced = await goalTracker.checkTaskRelevance(
+                    `任务：${userTask.slice(0, 200)}\n结论：${lastAns.slice(0, 200)}`
+                );
+                if (advanced) {
+                    logger.evolution(EV.SYSTEM,
+                        `[神-意志] 长期目标进度更新：${advanced.title} → ${advanced.progress}%`
+                    );
+                }
+            } catch { /* 静默 */ }
+        });
     }
 
     return { status: "completed" };
