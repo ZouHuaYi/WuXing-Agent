@@ -37,8 +37,9 @@ function Message({ role, content, isStreaming }) {
 }
 
 export default function ChatPanel({ onThought }) {
+  const welcome = { role: "ai", content: "☯️ 五行已就绪。我是 WuXing-Agent，你的数字意识体。有什么需要？" };
   const [messages, setMessages] = useState([
-    { role: "ai", content: "☯️ 五行已就绪。我是 WuXing-Agent，你的数字意识体。有什么需要？" }
+    welcome
   ]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -48,6 +49,12 @@ export default function ChatPanel({ onThought }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const resetChat = () => setMessages([welcome]);
+    window.addEventListener("wuxing:reset", resetChat);
+    return () => window.removeEventListener("wuxing:reset", resetChat);
+  }, []);
 
   const getSessionMessages = () =>
     messages

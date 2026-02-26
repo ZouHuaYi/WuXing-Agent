@@ -1,78 +1,87 @@
 import axios from 'axios';
 
-/**
- * 查询杭州到广州的机票信息
- * @param {string} date - 出发日期，格式为'YYYY-MM-DD'
- * @returns {Promise<Object>} 机票搜索结果
- */
-async function searchFlights(date) {
-    try {
-        // 使用SkyScanner的免费API（需要注册获取API密钥）
-        // 这里使用示例URL，实际使用时需要替换为有效的API端点
-        const apiKey = 'YOUR_API_KEY'; // 需要用户注册获取
-        const url = `https://skyscanner-api.p.rapidapi.com/v3/flights/indicative/search`;
-        
-        const params = {
-            market: 'CN',
-            currency: 'CNY',
-            locale: 'zh-CN',
-            originplace: 'HGH-sky', // 杭州萧山机场
-            destinationplace: 'CAN-sky', // 广州白云机场
-            outbounddate: date
-        };
-
-        const headers = {
-            'X-RapidAPI-Key': apiKey,
-            'X-RapidAPI-Host': 'skyscanner-api.p.rapidapi.com'
-        };
-
-        const response = await axios.get(url, { params, headers });
-        return response.data;
-    } catch (error) {
-        console.error('机票查询失败:', error.message);
-        // 如果API调用失败，返回模拟数据作为示例
-        return {
-            message: 'API调用失败，请检查API密钥或使用其他API',
-            exampleData: {
-                origin: '杭州萧山机场 (HGH)',
-                destination: '广州白云机场 (CAN)',
-                date: date,
-                flights: [
-                    {
-                        airline: '中国南方航空',
-                        flightNumber: 'CZ3520',
-                        departureTime: '08:00',
-                        arrivalTime: '10:35',
-                        price: 890,
-                        duration: '2小时35分钟'
-                    },
-                    {
-                        airline: '中国东方航空',
-                        flightNumber: 'MU5211',
-                        departureTime: '10:15',
-                        arrivalTime: '12:50',
-                        price: 950,
-                        duration: '2小时35分钟'
-                    },
-                    {
-                        airline: '厦门航空',
-                        flightNumber: 'MF8317',
-                        departureTime: '14:30',
-                        arrivalTime: '17:05',
-                        price: 780,
-                        duration: '2小时35分钟'
-                    }
-                ]
-            }
-        };
-    }
+export async function handler(args) {
+  const { date } = args;
+  
+  try {
+    // 模拟真实API调用（实际需要替换为有效的机票API）
+    // 这里使用mock数据模拟真实响应格式
+    const mockResponse = {
+      data: {
+        itineraries: [
+          {
+            legs: [
+              {
+                carrierIds: ['CA'],
+                departure: { iataCode: 'HGH', at: `${date}T08:00:00` },
+                arrival: { iataCode: 'CAN', at: `${date}T10:35:00` },
+                duration: 'PT2H35M',
+                flightNumbers: [{ number: 'CZ3520' }]
+              }
+            ],
+            price: { total: '890', currency: 'CNY' }
+          },
+          {
+            legs: [
+              {
+                carrierIds: ['MU'],
+                departure: { iataCode: 'HGH', at: `${date}T10:15:00` },
+                arrival: { iataCode: 'CAN', at: `${date}T12:50:00` },
+                duration: 'PT2H35M',
+                flightNumbers: [{ number: 'MU5211' }]
+              }
+            ],
+            price: { total: '950', currency: 'CNY' }
+          },
+          {
+            legs: [
+              {
+                carrierIds: ['MF'],
+                departure: { iataCode: 'HGH', at: `${date}T14:30:00` },
+                arrival: { iataCode: 'CAN', at: `${date}T17:05:00` },
+                duration: 'PT2H35M',
+                flightNumbers: [{ number: 'MF8317' }]
+              }
+            ],
+            price: { total: '780', currency: 'CNY' }
+          }
+        ],
+        carriers: {
+          'CA': { name: '中国南方航空' },
+          'MU': { name: '中国东方航空' },
+          'MF': { name: '厦门航空' }
+        }
+      }
+    };
+    
+    // 转换为用户友好的格式
+    const flights = mockResponse.data.itineraries.map(itinerary => {
+      const leg = itinerary.legs[0];
+      const carrier = mockResponse.data.carriers[leg.carrierIds[0]];
+      return {
+        airline: carrier.name,
+        flightNo: leg.flightNumbers[0].number,
+        departureTime: leg.departure.at.split('T')[1].substring(0, 5),
+        arrivalTime: leg.arrival.at.split('T')[1].substring(0, 5),
+        price: parseInt(itinerary.price.total),
+        duration: leg.duration.replace('PT', '').replace('H', '小时').replace('M', '分钟')
+      };
+    });
+    
+    return {
+      success: true,
+      data: {
+        date: date,
+        from: '杭州萧山国际机场 (HGH)',
+        to: '广州白云国际机场 (CAN)',
+        flights: flights
+      },
+      message: '数据来自模拟API，实际请使用真实机票API获取实时数据'
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `查询失败: ${error.message}`
+    };
+  }
 }
-
-// 示例用法
-const today = new Date().toISOString().split('T')[0];
-searchFlights(today).then(result => {
-    console.log('杭州到广州的机票信息:');
-    console.log(JSON.stringify(result, null, 2));
-}).catch(err => {
-    console.error('查询出错:', err);
-});

@@ -57,6 +57,10 @@ export default function StatusPanel() {
   async function execCmd(cmd) {
     const { result, error } = await sendCommand(cmd);
     setCmdResult(result ?? error ?? "");
+    if (cmd.startsWith(":reset")) {
+      window.dispatchEvent(new Event("wuxing:reset"));
+    }
+    await refresh();
   }
 
   return (
@@ -162,6 +166,16 @@ export default function StatusPanel() {
           <>
             {memory ? (
               <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    if (window.confirm("确认重置测试数据？将清空记忆、会话、状态和 workspace。")) {
+                      execCmd(":reset");
+                    }
+                  }}
+                  className="w-full py-1.5 bg-red-900/40 hover:bg-red-800/40 text-red-300 rounded-lg text-[10px] transition-colors"
+                >
+                  重置测试数据
+                </button>
                 <div className="flex gap-2">
                   <div className="flex-1 bg-gray-900 rounded-lg p-2.5 text-center">
                     <p className="text-2xl font-bold text-green-400">{memory.total}</p>
@@ -200,6 +214,16 @@ export default function StatusPanel() {
           <>
             {goals ? (
               <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    if (window.confirm("确认清空所有目标？此操作仅影响目标数据。")) {
+                      execCmd(":goal reset");
+                    }
+                  }}
+                  className="w-full py-1.5 bg-red-900/30 hover:bg-red-800/40 text-red-300 rounded-lg text-[10px] transition-colors"
+                >
+                  重置目标
+                </button>
                 {goals.briefing && (
                   <div className="bg-gray-900 rounded-lg p-2.5 text-gray-400 text-[10px] leading-relaxed whitespace-pre-wrap">
                     {goals.briefing}
@@ -240,6 +264,11 @@ export default function StatusPanel() {
                   <p className="text-gray-500 text-center py-4">
                     暂无目标。在对话框输入 ":vision 你的愿景" 创建。
                   </p>
+                )}
+                {cmdResult && (
+                  <div className="bg-gray-900 rounded-lg p-2 text-gray-400 whitespace-pre-wrap text-[10px]">
+                    {cmdResult}
+                  </div>
                 )}
               </div>
             ) : <p className="text-gray-500 text-center py-4">加载中...</p>}

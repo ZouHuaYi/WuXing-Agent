@@ -9,4 +9,4 @@ description: 查询杭州到广州的机票信息，支持指定出发日期
 
 ## 来源
 
-workspace/flight_search.js（Node.js）
+workspace/index.js（Node.js）

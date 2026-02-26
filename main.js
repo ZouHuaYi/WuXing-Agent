@@ -24,8 +24,8 @@ import { runTeam }      from "./src/engine/orchestrator.js";
 import { logger, EV }   from "./src/utils/logger.js";
 import cfg from "./config/wuxing.json" with { type: "json" };
 import { existsSync } from "fs";
-import { readdir, unlink, mkdir } from "fs/promises";
-import { join } from "path";
+import { readdir, unlink, mkdir, rm } from "fs/promises";
+import { join, resolve } from "path";
 import { WORKSPACE_DIR } from "./src/engine/toolBox.js";
 
 const DIVIDER        = "-".repeat(56);
@@ -80,6 +80,7 @@ async function initSystem() {
     console.log("    :w / :ls              - 工作区（查看 Agent 产出文件）");
     console.log("    :open                 - 在资源管理器中打开 workspace/ 目录");
     console.log("    :clean [后缀]         - 清理工作区（可按后缀筛选，如 :clean js）");
+    console.log("    :reset [--keep-workspace] - 重置测试数据（记忆/会话/状态，默认清空 workspace）");
     console.log("    :skills / :list       - 技能库（查看所有工具，含 MCP 来源）");
     console.log("    :reload               - 热加载（重新扫描 skills/ + 刷新 MCP 工具）");
     console.log("    :install <服务名> <命令> [参数...]");
@@ -97,7 +98,7 @@ async function initSystem() {
     console.log("    :vision <愿景描述>    - 输入长期愿景，AI 自动拆解为里程碑计划");
     console.log("    :status               - 刷新并查看自我状态看板（STATUS.md 摘要）");
     console.log("    :status resolve <词>  - 标记 STATUS.md 中某个缺陷已修复");
-    console.log("    :goal <子指令>        - 长期目标管理（add/list/done/complete/briefing）");
+    console.log("    :goal <子指令>        - 长期目标管理（add/list/done/complete/briefing/reset）");
     console.log("    :pulse                - 查看五行心跳（自主代谢）状态");
     console.log("    :pulse start/stop     - 启动/停止心跳调度器");
     console.log("    :evolve               - 查看 Agent 提交的架构修改提案");
@@ -633,6 +634,40 @@ function clearSession() {
     console.log("\n[系统] 会话上下文已清除（内存 + 磁盘），开始全新对话\n");
 }
 
+async function handleResetData(arg = "") {
+    const keepWorkspace = arg.includes("--keep-workspace");
+
+    // 1) 清会话（内存 + 磁盘）
+    clearSession();
+
+    // 2) 清记忆（内存 + 落盘文件）
+    await wisdomMemory.replaceAll([]);
+    const files = [
+        "data/wisdom.json",
+        "data/wisdom.vec.json",
+        "data/defects.json",
+        "STATUS.md",
+    ];
+    for (const rel of files) {
+        const abs = resolve(process.cwd(), rel);
+        if (existsSync(abs)) await rm(abs, { recursive: true, force: true });
+    }
+
+    // 3) 可选清理 workspace
+    if (!keepWorkspace) {
+        await handleCleanWorkspace();
+    }
+
+    // 4) 重建状态看板
+    const allToolNames = skillManager.getAllTools().map((t) => t.name);
+    statusBoard.refresh(allToolNames);
+
+    console.log(
+        `\n[系统] 重置完成：记忆已清空，状态已重建，workspace` +
+        `${keepWorkspace ? "已保留" : "已清理"}\n`
+    );
+}
+
 // ── :status 指令处理器 ───────────────────────────────────
 function handleStatus(arg) {
     const sub     = arg.trim().split(/\s+/)[0] ?? "";
@@ -895,6 +930,13 @@ async function handleGoal(arg) {
             break;
         }
 
+        // :goal reset  →  清空全部目标（测试用途）
+        case "reset": {
+            goalTracker.resetAll();
+            console.log("\n[神-意志] 目标已全部清空\n");
+            break;
+        }
+
         default: {
             console.log([
                 "",
@@ -906,6 +948,7 @@ async function handleGoal(arg) {
                 "  :goal complete <id>                          — 标记完成",
                 "  :goal pause <id>                             — 暂停",
                 "  :goal briefing                               — 今日使命晨报",
+                "  :goal reset                                  — 清空全部目标（测试）",
                 "",
             ].join("\n"));
         }
@@ -957,6 +1000,7 @@ rl.on("line", async (line) => {
         case ":w":
         case ":ls":      await showWorkspaceStatus();        break;
         case ":clean":   await handleCleanWorkspace(arg);    break;
+        case ":reset":   await handleResetData(arg);         break;
         case ":open":    await openWorkspaceFolder();        break;
         case ":reload":   await handleReloadSkills();          break;
         case ":skills":

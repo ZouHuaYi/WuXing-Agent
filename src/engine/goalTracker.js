@@ -109,6 +109,12 @@ export class GoalTracker {
             : this.goals;
     }
 
+    // 清空全部目标（测试重置场景）
+    resetAll() {
+        this.goals = [];
+        this._save();
+    }
+
     // 推进进度（delta 为增量，note 为本次进展说明）
     advance(id, note, delta = 5) {
         const goal = this.get(id);

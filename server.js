@@ -7,7 +7,7 @@
 import "dotenv/config";
 import express         from "express";
 import cors            from "cors";
-import { readFileSync, existsSync, readdirSync, statSync } from "fs";
+import { readFileSync, existsSync, readdirSync, statSync, rmSync } from "fs";
 import { resolve, join } from "path";
 
 import { agentBus }    from "./src/engine/eventBus.js";
@@ -34,6 +34,57 @@ app.use(express.json({ limit: "2mb" }));
 const DIST = resolve(process.cwd(), "web/dist");
 if (existsSync(DIST)) {
     app.use(express.static(DIST));
+}
+
+function resetRuntimeData({ clearWorkspace = true, clearGoals = true } = {}) {
+    const removed = [];
+    const removeIfExists = (targetPath) => {
+        if (!existsSync(targetPath)) return;
+        rmSync(targetPath, { recursive: true, force: true });
+        removed.push(targetPath);
+    };
+
+    // 1) 会话：清空磁盘会话文件
+    sessionManager.clear();
+    removeIfExists(resolve(process.cwd(), "data/sessions/current.json"));
+
+    // 2) 记忆：清空内存索引 + 落盘文件
+    wisdomMemory.rawDocs = [];
+    wisdomMemory.vectors = [];
+    removeIfExists(resolve(process.cwd(), "data/wisdom.json"));
+    removeIfExists(resolve(process.cwd(), "data/wisdom.vec.json"));
+
+    // 3) 状态：清空缺陷记录并重建 STATUS.md
+    removeIfExists(resolve(process.cwd(), "data/defects.json"));
+    removeIfExists(resolve(process.cwd(), "STATUS.md"));
+
+    // 4) 目标：可选清空 goals（测试期通常期望全新状态）
+    if (clearGoals) {
+        goalTracker.resetAll?.();
+        removeIfExists(resolve(process.cwd(), "data/goals.json"));
+    }
+
+    // 5) 工作区：测试阶段通常希望从干净目录开始
+    if (clearWorkspace) {
+        const wsDir = resolve(process.cwd(), cfg.tools?.workspaceDir ?? "workspace");
+        if (existsSync(wsDir)) {
+            for (const name of readdirSync(wsDir)) {
+                removeIfExists(join(wsDir, name));
+            }
+        }
+    }
+
+    const allNames = skillManager.getAllTools().map((t) => t.name);
+    statusBoard.refresh(allNames);
+
+    return {
+        ok: true,
+        removedCount: removed.length,
+        removed,
+        memoryCount: wisdomMemory.getAllDocs().length,
+        workspaceCleared: clearWorkspace,
+        goalsCleared: clearGoals,
+    };
 }
 
 // ── SSE：实时思维流 ──────────────────────────────────────
@@ -174,6 +225,21 @@ app.get("/api/memory", async (req, res) => {
     });
 });
 
+// ── POST /api/reset ────────────────────────────────────────
+// 清空测试期运行数据：会话、记忆、状态、（可选）工作区
+app.post("/api/reset", (req, res) => {
+    try {
+        const { clearWorkspace = true, clearGoals = true } = req.body ?? {};
+        const result = resetRuntimeData({
+            clearWorkspace: !!clearWorkspace,
+            clearGoals: !!clearGoals,
+        });
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ── POST /api/command — REPL 指令封装 ────────────────────
 app.post("/api/command", async (req, res) => {
     const { cmd } = req.body;
@@ -201,6 +267,21 @@ app.post("/api/command", async (req, res) => {
         } else if (cmd === ":evolve rollback") {
             const r = geneticEvolver.rollback();
             result = r.message;
+        } else if (cmd === ":goal reset") {
+            goalTracker.resetAll?.();
+            statusBoard.refresh(skillManager.getAllTools().map((t) => t.name));
+            result = "目标已清空";
+        } else if (cmd.startsWith(":reset")) {
+            const keepWorkspace = cmd.includes("--keep-workspace");
+            const keepGoals = cmd.includes("--keep-goals");
+            const r = resetRuntimeData({
+                clearWorkspace: !keepWorkspace,
+                clearGoals: !keepGoals,
+            });
+            result =
+                `重置完成：清理 ${r.removedCount} 个数据项，` +
+                `记忆库存 ${r.memoryCount}，目标${r.goalsCleared ? "已清空" : "保留"}，` +
+                `工作区${r.workspaceCleared ? "已清空" : "保留"}`;
         } else {
             result = `未知指令：${cmd}`;
         }
