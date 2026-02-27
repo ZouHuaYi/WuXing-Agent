@@ -13,9 +13,9 @@
   "externalAgents": {
     "_comment": "外部终端代理命令模板，{prompt} 会被替换为任务文本；protectedPathPatterns 命中时禁用自动审批",
     "protectedPathPatterns": [
-      "src/engine/evolve\.js",
+      "src/engine/evolve\\.js",
       "config/",
-      "\.env"
+      "\\.env"
     ],
     "codex": {
       "command": "codex",
