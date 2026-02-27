@@ -25,6 +25,7 @@ import { terminalTaskManager } from "./src/engine/terminalController.js";
 import { routeIntent, buildDirectReply } from "./src/engine/intentRouter.js";
 import { auditAssets } from "./src/engine/assetAuditor.js";
 import { queryExperienceUnified, recordExperienceUnified, listRecentExperience } from "./src/engine/experienceCache.js";
+import { mcpPool } from "./src/engine/mcpClient.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import cfg from "./config/wuxing.json" with { type: "json" };
 
@@ -505,6 +506,14 @@ app.get("/api/v1/experience-map", (req, res) => {
     res.json({ items: listRecentExperience(limit) });
 });
 
+app.get("/api/v1/mcp/status", (req, res) => {
+    try {
+        res.json({ servers: mcpPool.getStatus() });
+    } catch (e) {
+        res.status(500).json({ error: e.message || "获取 MCP 状态失败" });
+    }
+});
+
 app.post("/api/v1/approval-policy", (req, res) => {
     try {
         const { policy = {}, persist = true } = req.body ?? {};
@@ -650,6 +659,20 @@ function attachWebSocketBridge(httpServer) {
 async function bootstrap() {
     // 预热记忆
     await wisdomMemory.loadFromDisk();
+    await mcpPool.connectAll();
+    await skillManager.refreshSkills?.();
+    const mcpStatus = mcpPool.getStatus();
+    const mcpNames = Object.keys(mcpStatus);
+    if (mcpNames.length > 0) {
+        const summary = mcpNames.map((name) => {
+            const s = mcpStatus[name];
+            return `${name}:${s.status}${s.toolCount ? `(${s.toolCount})` : ""}`;
+        }).join(" | ");
+        console.log(`[五行-Web] MCP 状态 → ${summary}`);
+    } else {
+        console.log("[五行-Web] MCP 状态 → 未配置服务");
+    }
+
     const allNames = skillManager.getAllTools().map((t) => t.name);
     statusBoard.refresh(allNames);
 

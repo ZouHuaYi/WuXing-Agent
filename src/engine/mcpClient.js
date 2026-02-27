@@ -54,10 +54,19 @@ class MCPServerConnection {
         const { command, args = [], env = {} } = this.serverConfig;
 
         try {
+            const mergedEnv = {
+                ...process.env,
+                ...env,
+                // 减少 npx/cmd 在 stdio 输出的噪声，避免污染 MCP JSON-RPC 流
+                NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL ?? "silent",
+                NPM_CONFIG_PROGRESS: process.env.NPM_CONFIG_PROGRESS ?? "false",
+                npm_config_loglevel: process.env.npm_config_loglevel ?? "silent",
+                npm_config_progress: process.env.npm_config_progress ?? "false",
+            };
             this.transport = new StdioClientTransport({
                 command,
                 args,
-                env: { ...process.env, ...env },
+                env: mergedEnv,
             });
 
             this.client = new Client(

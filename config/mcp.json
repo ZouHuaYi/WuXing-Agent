@@ -3,17 +3,15 @@
   "_docs": "每个 server 必须有 command + args；env 可选；description 供人类阅读",
   "mcpServers": {
     "everything": {
-      "command": "npx",
+      "command": "npx.cmd",
       "args": [
         "-y",
         "@modelcontextprotocol/server-everything"
       ]
     },
     "tavily-search": {
-      "command": "cmd",
+      "command": "npx.cmd",
       "args": [
-        "/c",
-        "npx",
         "-y",
         "tavily-mcp@0.1.3"
       ],
@@ -22,13 +20,10 @@
       }
     },
     "playwright-mcp": {
-      "command": "cmd",
+      "command": "npx.cmd",
       "args": [
-        "/c",
-        "npx",
         "-y",
-        "playwright-mcp",
-        "--version"
+        "playwright-mcp"
       ]
     }
   }
