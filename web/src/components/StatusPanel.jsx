@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { fetchStatus, fetchSkills, fetchMemory, fetchGoals, sendCommand } from "../lib/api.js";
-import { RefreshCw, Zap, Brain, Target, ShieldAlert } from "lucide-react";
+import {
+  fetchStatus, fetchSkills, fetchMemory, fetchGoals, sendCommand,
+  fetchApprovalPolicy, updateApprovalPolicy, fetchSelfProfile,
+} from "../lib/api.js";
+import { RefreshCw, Zap, Brain, Target, ShieldAlert, Scale, ScanEye } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 function Tab({ active, onClick, children }) {
@@ -37,8 +40,12 @@ export default function StatusPanel() {
   const [skills, setSkills] = useState(null);
   const [memory, setMemory] = useState(null);
   const [goals, setGoals]   = useState(null);
+  const [policy, setPolicy] = useState(null);
+  const [policyDraft, setPolicyDraft] = useState(null);
+  const [selfProfile, setSelfProfile] = useState(null);
   const [cmdResult, setCmdResult] = useState("");
   const [loading, setLoading]     = useState(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -47,6 +54,12 @@ export default function StatusPanel() {
       if (tab === "skills") setSkills(await fetchSkills());
       if (tab === "memory") setMemory(await fetchMemory());
       if (tab === "goals")  setGoals(await fetchGoals());
+      if (tab === "self") setSelfProfile(await fetchSelfProfile());
+      if (tab === "policy") {
+        const p = await fetchApprovalPolicy();
+        setPolicy(p);
+        setPolicyDraft(JSON.parse(JSON.stringify(p)));
+      }
     } finally {
       setLoading(false);
     }
@@ -61,6 +74,44 @@ export default function StatusPanel() {
       window.dispatchEvent(new Event("wuxing:reset"));
     }
     await refresh();
+  }
+
+  function patchRisk(risk, key, value) {
+    setPolicyDraft((prev) => {
+      if (!prev?.riskRules?.[risk]) return prev;
+      return {
+        ...prev,
+        riskRules: {
+          ...prev.riskRules,
+          [risk]: { ...prev.riskRules[risk], [key]: value },
+        },
+      };
+    });
+  }
+
+  async function savePolicy() {
+    if (!policyDraft?.riskRules) return;
+    setSavingPolicy(true);
+    try {
+      const normalized = { riskRules: {} };
+      for (const risk of ["low", "medium", "high", "critical"]) {
+        const rule = policyDraft.riskRules[risk] || {};
+        normalized.riskRules[risk] = {
+          autoApprove: !!rule.autoApprove,
+          allowModify: !!rule.allowModify,
+          timeoutMs: Math.max(5000, Number(rule.timeoutMs) || 60000),
+        };
+      }
+      const r = await updateApprovalPolicy(normalized, true);
+      if (!r.ok) throw new Error(r.error || "保存失败");
+      setPolicy(r.policy);
+      setPolicyDraft(JSON.parse(JSON.stringify(r.policy)));
+      setCmdResult("审批策略已保存并生效。");
+    } catch (e) {
+      setCmdResult(`保存失败：${e.message}`);
+    } finally {
+      setSavingPolicy(false);
+    }
   }
 
   return (
@@ -78,6 +129,12 @@ export default function StatusPanel() {
         </Tab>
         <Tab active={tab === "goals"} onClick={() => setTab("goals")}>
           <Target size={11} className="inline mr-1" />目标
+        </Tab>
+        <Tab active={tab === "policy"} onClick={() => setTab("policy")}>
+          <Scale size={11} className="inline mr-1" />策略
+        </Tab>
+        <Tab active={tab === "self"} onClick={() => setTab("self")}>
+          <ScanEye size={11} className="inline mr-1" />自知
         </Tab>
         <button onClick={refresh} disabled={loading}
           className="ml-auto text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40">
@@ -270,6 +327,128 @@ export default function StatusPanel() {
                     {cmdResult}
                   </div>
                 )}
+              </div>
+            ) : <p className="text-gray-500 text-center py-4">加载中...</p>}
+          </>
+        )}
+
+        {/* ── 策略面板 ── */}
+        {tab === "policy" && (
+          <>
+            {policyDraft ? (
+              <div className="space-y-2">
+                <div className="bg-gray-900 rounded-lg p-2.5 text-[10px] text-gray-400">
+                  审批策略热更新。保存后立即影响新审批请求，并落盘到 config/agents.json。
+                </div>
+                {["low", "medium", "high", "critical"].map((risk) => {
+                  const rule = policyDraft.riskRules?.[risk] || {};
+                  return (
+                    <div key={risk} className="bg-gray-900 rounded-lg p-2.5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-gray-200 font-semibold uppercase">{risk}</span>
+                        <span className="text-[10px] text-gray-500">风险级别</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-gray-400">自动批准</span>
+                        <input
+                          type="checkbox"
+                          checked={!!rule.autoApprove}
+                          onChange={(e) => patchRisk(risk, "autoApprove", e.target.checked)}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-gray-400">允许修改指令</span>
+                        <input
+                          type="checkbox"
+                          checked={!!rule.allowModify}
+                          onChange={(e) => patchRisk(risk, "allowModify", e.target.checked)}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] gap-2">
+                        <span className="text-gray-400">审批超时 (ms)</span>
+                        <input
+                          type="number"
+                          min="5000"
+                          step="1000"
+                          value={Number(rule.timeoutMs) || 0}
+                          onChange={(e) => patchRisk(risk, "timeoutMs", e.target.value)}
+                          className="w-28 px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-200"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setPolicyDraft(JSON.parse(JSON.stringify(policy)))}
+                    className="flex-1 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-[10px] transition-colors"
+                  >
+                    还原
+                  </button>
+                  <button
+                    disabled={savingPolicy}
+                    onClick={savePolicy}
+                    className="flex-1 py-1.5 bg-indigo-800/40 hover:bg-indigo-700/40 text-indigo-300 rounded-lg text-[10px] transition-colors disabled:opacity-50"
+                  >
+                    {savingPolicy ? "保存中..." : "保存并生效"}
+                  </button>
+                </div>
+                {cmdResult && (
+                  <div className="bg-gray-900 rounded-lg p-2 text-gray-400 whitespace-pre-wrap text-[10px]">
+                    {cmdResult}
+                  </div>
+                )}
+              </div>
+            ) : <p className="text-gray-500 text-center py-4">加载中...</p>}
+          </>
+        )}
+
+        {/* ── 自知面板 ── */}
+        {tab === "self" && (
+          <>
+            {selfProfile ? (
+              <div className="space-y-2">
+                <div className="bg-gray-900 rounded-lg p-2.5">
+                  <p className="text-gray-500 text-[10px] mb-2 font-semibold uppercase tracking-wider">能力画像</p>
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <div className="bg-gray-800 rounded p-2 text-gray-300">
+                      本地工具：{(selfProfile.capabilities?.builtinTools?.length ?? 0) + (selfProfile.capabilities?.dynamicTools?.length ?? 0)}
+                    </div>
+                    <div className="bg-gray-800 rounded p-2 text-gray-300">
+                      MCP 工具：{selfProfile.capabilities?.mcpTools?.length ?? 0}
+                    </div>
+                    <div className="bg-gray-800 rounded p-2 text-gray-300 col-span-2">
+                      MCP 服务：{(selfProfile.capabilities?.mcpServersConfigured ?? []).join("、") || "无"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-2.5">
+                  <p className="text-gray-500 text-[10px] mb-2 font-semibold uppercase tracking-wider">工作流</p>
+                  <div className="space-y-1">
+                    {(selfProfile.workflows ?? []).map((w, i) => (
+                      <p key={i} className="text-gray-300 text-[10px]">- {w}</p>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-2.5">
+                  <p className="text-gray-500 text-[10px] mb-2 font-semibold uppercase tracking-wider">系统限制</p>
+                  <div className="space-y-1 text-[10px] text-gray-300">
+                    <p>- 最大工具循环：{selfProfile.limits?.maxToolCycles ?? "?"}</p>
+                    <p>- 高风险需审批：{selfProfile.limits?.requiresApprovalForHighRisk ? "是" : "否"}</p>
+                    <p>- 只读模式：{selfProfile.limits?.readOnlyMode ? "是" : "否"}</p>
+                    <p>- 外部任务超时上限：{selfProfile.limits?.externalAgentTimeoutMaxMs ?? "?"} ms</p>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-2.5">
+                  <p className="text-gray-500 text-[10px] mb-2 font-semibold uppercase tracking-wider">记忆参数</p>
+                  <div className="space-y-1 text-[10px] text-gray-300">
+                    <p>- 语义召回 TopK：{selfProfile.memory?.topK ?? "?"}</p>
+                    <p>- 熵减周期：每 {selfProfile.memory?.entropyEvery ?? "?"} 次交互</p>
+                  </div>
+                </div>
               </div>
             ) : <p className="text-gray-500 text-center py-4">加载中...</p>}
           </>

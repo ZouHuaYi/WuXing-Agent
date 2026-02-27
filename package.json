@@ -20,9 +20,11 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@octokit/rest": "^22.0.1",
     "axios": "^1.13.5",
+    "cheerio": "^1.2.0",
     "dotenv": "^16.4.7",
     "fontkit": "^2.0.4",
     "node-binance-api": "^1.0.22",
+    "node-pty": "^1.1.0",
     "pdfkit": "^0.17.2",
     "ws": "^8.19.0",
     "zod": "^4.3.6"

@@ -18,6 +18,11 @@ export async function fetchSkills()    { return (await fetch(`${BASE}/skills`)).
 export async function fetchWorkspace() { return (await fetch(`${BASE}/workspace`)).json(); }
 export async function fetchGoals()     { return (await fetch(`${BASE}/goals`)).json(); }
 export async function fetchMemory()    { return (await fetch(`${BASE}/memory`)).json(); }
+export async function fetchSelfProfile() {
+  const res = await fetch(`${BASE}/v1/self-profile`);
+  if (!res.ok) throw new Error("获取自我画像失败");
+  return res.json();
+}
 
 export async function fetchWorkspaceFile(name) {
   return (await fetch(`${BASE}/workspace/${encodeURIComponent(name)}`)).json();
@@ -35,6 +40,21 @@ export async function sendCommand(cmd) {
 export async function fetchPendingActions() {
   const res = await fetch(`${BASE}/v1/pending-actions`);
   if (!res.ok) throw new Error("获取审批队列失败");
+  return res.json();
+}
+
+export async function fetchApprovalPolicy() {
+  const res = await fetch(`${BASE}/v1/approval-policy`);
+  if (!res.ok) throw new Error("获取审批策略失败");
+  return res.json();
+}
+
+export async function updateApprovalPolicy(policy, persist = true) {
+  const res = await fetch(`${BASE}/v1/approval-policy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ policy, persist }),
+  });
   return res.json();
 }
 
@@ -73,6 +93,15 @@ export async function sendExternalInput(id, text) {
 export async function stopExternalTask(id) {
   const res = await fetch(`${BASE}/v1/external-agent/tasks/${encodeURIComponent(id)}/stop`, {
     method: "POST",
+  });
+  return res.json();
+}
+
+export async function resizeExternalTask(id, cols, rows) {
+  const res = await fetch(`${BASE}/v1/external-agent/tasks/${encodeURIComponent(id)}/resize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cols, rows }),
   });
   return res.json();
 }

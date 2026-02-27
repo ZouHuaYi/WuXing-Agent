@@ -3,7 +3,55 @@ import ReactMarkdown from "react-markdown";
 import { sendChat, startExternalAgent, sendExternalInput, stopExternalTask } from "../lib/api.js";
 import { Send, Loader2, Bot, User } from "lucide-react";
 
+function formatRouteSummary(route) {
+  if (!route) return "";
+  const tierMap = {
+    L1_QUERY: "L1 禅语",
+    L2_OBSERVE: "L2 察言",
+    L3_SIMPLE_OPS: "L3 小技",
+    L4_EXPERT: "L4 攻坚",
+  };
+  const decisionMap = {
+    LOCAL_FIRST: "本地优先",
+    EXPERT_GATED: "专家门控",
+  };
+  const tier = tierMap[route.tier] || route.tier || "未知";
+  const decision = decisionMap[route.decision] || route.decision || "未知";
+  const hint = route.canSkipExpert ? "已跳过专家工具" : "可能调用专家工具";
+  const fit = route.capabilityFit ? `，能力匹配:${route.capabilityFit}` : "";
+  const gaps = Array.isArray(route.capabilityGaps) && route.capabilityGaps.length
+    ? `，约束:${route.capabilityGaps[0]}`
+    : "";
+  return `路由判定：${tier} · ${decision}（${hint}${fit}${gaps}）`;
+}
+
+function formatAssetAuditSummary(assetAudit) {
+  if (!assetAudit) return "";
+  const tag = assetAudit.reuseRecommended ? "建议复用现有资产" : "未命中可复用资产";
+  const top = assetAudit.matches?.[0];
+  if (!top) return `资产审计：${tag}`;
+  return `资产审计：${tag}（${top.path}, score=${top.score}）`;
+}
+
+function formatExperienceSummary(experience) {
+  if (!experience?.hit) return "";
+  const top = experience.hits?.[0];
+  if (!top) return "经验缓存：命中历史经验";
+  const asset = top.assetPath ? `，资产:${top.assetPath}` : "";
+  return `经验缓存：命中历史经验（score=${top.score}${asset}）`;
+}
+
 function Message({ role, content, isStreaming }) {
+  if (role === "system") {
+    return (
+      <div className="flex justify-center">
+        <div className="px-3 py-1 rounded-full bg-gray-800 text-gray-400 text-[10px]">
+          {content}
+        </div>
+      </div>
+    );
+  }
+
   const isAI = role === "ai";
   return (
     <div className={`flex gap-3 ${isAI ? "" : "flex-row-reverse"}`}>
@@ -178,7 +226,19 @@ export default function ChatPanel({ thoughts = [] }) {
         return;
       }
 
-      const { answer } = await sendChat(text, getSessionMessages());
+      const { answer, route, assetAudit, experience } = await sendChat(text, getSessionMessages());
+      const routeLine = formatRouteSummary(route);
+      if (routeLine) {
+        setMessages((prev) => [...prev, { role: "system", content: routeLine }]);
+      }
+      const expLine = formatExperienceSummary(experience);
+      if (expLine) {
+        setMessages((prev) => [...prev, { role: "system", content: expLine }]);
+      }
+      const auditLine = formatAssetAuditSummary(assetAudit);
+      if (auditLine) {
+        setMessages((prev) => [...prev, { role: "system", content: auditLine }]);
+      }
       setMessages((prev) => [...prev, { role: "ai", content: answer || "(无回应)" }]);
     } catch (e) {
       setMessages((prev) => [...prev, {

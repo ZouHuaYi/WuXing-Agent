@@ -1,21 +1,63 @@
 import { EventEmitter } from "events";
 import { spawn } from "child_process";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import { agentBus } from "./eventBus.js";
+import { approvalManager } from "./approvalManager.js";
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 const LOG_LIMIT = 500;
 const AGENTS_CONFIG = resolve(process.cwd(), "config/agents.json");
+const APPROVAL_DEBOUNCE_MS = 1500;
 
-const APPROVAL_PATTERNS = [
-    /Are you sure\?/i,
-    /\[y\/n\]/i,
-    /Apply these changes\?/i,
-    /Confirm\?/i,
-    /Do you want to proceed\?/i,
-    /Press enter to continue/i,
-];
+const AGENT_PROMPT_PATTERNS = {
+    CONFIRMATION: [
+        /Are you sure\?/i,
+        /\[y\/n\]/i,
+        /Apply these changes\?/i,
+        /Confirm\?/i,
+        /Do you want to proceed\?/i,
+        /Press enter to continue/i,
+        /continue\?/i,
+        /proceed\?/i,
+    ],
+    PROGRESS: [/(\d{1,3})%/g, /processing/i, /analyzing/i, /downloading/i, /installing/i],
+    ERROR: [/error/i, /fail/i, /exception/i],
+};
+
+function shellQuote(arg) {
+    const s = String(arg ?? "");
+    if (!s.length) return "\"\"";
+    if (process.platform === "win32") {
+        return `"${s.replace(/"/g, '\\"')}"`;
+    }
+    return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildShellCommand(command, args = []) {
+    const all = [command, ...args].map((s) => shellQuote(s));
+    return all.join(" ");
+}
+
+function psQuote(arg) {
+    const s = String(arg ?? "");
+    return `'${s.replace(/'/g, "''")}'`;
+}
+
+function buildPowerShellCommand(command, args = []) {
+    const cmd = psQuote(command);
+    const rest = args.map((a) => psQuote(a)).join(" ");
+    return rest ? `& ${cmd} ${rest}` : `& ${cmd}`;
+}
+
+async function loadNodePty() {
+    try {
+        const mod = await import("node-pty");
+        return mod;
+    } catch {
+        return null;
+    }
+}
 
 function loadExternalAgentConfig() {
     try {
@@ -37,6 +79,27 @@ function getProtectedPathPatterns() {
     }).filter(Boolean);
 }
 
+function evaluateRisk({ commandLine = "", output = "", protectedPatterns = [] }) {
+    const haystack = `${commandLine}\n${output}`.toLowerCase();
+    if (/(^|\s)(rm\s+-rf|del\s+\/[sq]|rd\s+\/[sq]|format\s+|shutdown|reboot)(\s|$)/i.test(haystack)) {
+        return "critical";
+    }
+    if (protectedPatterns.some((p) => p.test(haystack))) {
+        return "high";
+    }
+    if (/(npm\s+(install|i)|pnpm\s+install|yarn\s+add|npm\s+run\s+(build|test)|pnpm\s+(build|test)|yarn\s+(build|test))/i.test(haystack)) {
+        return "medium";
+    }
+    return "low";
+}
+
+function parseProgress(output) {
+    const match = String(output).match(/(\d{1,3})%/);
+    if (!match) return null;
+    const p = Math.max(0, Math.min(100, Number(match[1])));
+    return Number.isFinite(p) ? p : null;
+}
+
 function buildAgentCommand(agentName, taskPrompt) {
     const cfg = loadExternalAgentConfig();
     const fromConfig = cfg[agentName];
@@ -44,9 +107,11 @@ function buildAgentCommand(agentName, taskPrompt) {
         const argsTpl = Array.isArray(fromConfig.argsTemplate) ? fromConfig.argsTemplate : ["{prompt}"];
         const args = argsTpl.map((s) => String(s).replaceAll("{prompt}", taskPrompt));
         const stdinPrompt = fromConfig.promptViaStdin ? taskPrompt : null;
-        const extraEnv = (fromConfig.env && typeof fromConfig.env === "object") ? fromConfig.env : null;
+        const extraEnvRaw = (fromConfig.env && typeof fromConfig.env === "object") ? fromConfig.env : {};
+        const extraEnv = { ...extraEnvRaw };
         const envStrip = Array.isArray(fromConfig.envStrip) ? fromConfig.envStrip : null;
-        return { command: fromConfig.command, args, stdinPrompt, extraEnv, envStrip, useShell: true };
+        const useShell = typeof fromConfig.useShell === "boolean" ? fromConfig.useShell : true;
+        return { command: fromConfig.command, args, stdinPrompt, extraEnv, envStrip, useShell };
     }
 
     if (agentName === "codex") {
@@ -61,9 +126,15 @@ function buildAgentCommand(agentName, taskPrompt) {
             const cmdline = `codex ${codexArgs.join(" ")}`;
             return {
                 command: "powershell.exe",
-                args: ["-NoLogo", "-Command", cmdline],
+                args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", cmdline],
                 stdinPrompt: taskPrompt,
-                envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"],
+                extraEnv: {
+                    NPM_CONFIG_LOGLEVEL: "silent",
+                    NPM_CONFIG_PROGRESS: "false",
+                    npm_config_loglevel: "silent",
+                    npm_config_progress: "false",
+                },
+                envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE"],
                 useShell: false,
             };
         }
@@ -71,7 +142,13 @@ function buildAgentCommand(agentName, taskPrompt) {
             command: "codex",
             args: codexArgs,
             stdinPrompt: taskPrompt,
-            envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"],
+            extraEnv: {
+                NPM_CONFIG_LOGLEVEL: "silent",
+                NPM_CONFIG_PROGRESS: "false",
+                npm_config_loglevel: "silent",
+                npm_config_progress: "false",
+            },
+            envStrip: ["OPENAI_BASE_URL", "OPENAI_API_BASE"],
             useShell: false,
         };
     }
@@ -94,6 +171,7 @@ export class TerminalController extends EventEmitter {
         cwd = process.cwd(),
         env = process.env,
         extraEnv = null,
+        taskPrompt = "",
     }) {
         super();
         this.id = id;
@@ -108,23 +186,30 @@ export class TerminalController extends EventEmitter {
         this.cwd = cwd;
         this.env = env;
         this.extraEnv = extraEnv;
+        this.taskPrompt = taskPrompt;
         this.proc = null;
+        this.pty = null;
+        this.ptyMode = false;
         this.timer = null;
         this.finished = false;
+        this.awaitingApproval = false;
+        this.lastApprovalTs = 0;
+        this.protectedPatterns = getProtectedPathPatterns();
     }
 
-    execute() {
+    async execute() {
         const mergedEnv = { ...this.env, ...(this.extraEnv ?? {}) };
         for (const k of this.envStrip) {
             if (k in mergedEnv) delete mergedEnv[k];
         }
-
-        this.proc = spawn(this.command, this.args, {
-            shell: this.useShell,
-            cwd: this.cwd,
-            env: mergedEnv,
-            stdio: ["pipe", "pipe", "pipe"],
-        });
+        const codexHome = mergedEnv.CODEX_HOME;
+        if (typeof codexHome === "string" && codexHome.trim()) {
+            try {
+                mkdirSync(codexHome, { recursive: true });
+            } catch {
+                // Let downstream process report a clearer filesystem permission error.
+            }
+        }
 
         this.emit("start", {
             id: this.id,
@@ -136,6 +221,76 @@ export class TerminalController extends EventEmitter {
         this.timer = setTimeout(() => {
             this.stop("timeout");
         }, this.timeoutMs);
+
+        const ptyMod = await loadNodePty();
+        if (ptyMod?.spawn) {
+            const isWin = process.platform === "win32";
+            const shellCommand = this.useShell
+                ? (isWin ? buildPowerShellCommand(this.command, this.args) : buildShellCommand(this.command, this.args))
+                : null;
+            const launch = this.useShell
+                ? (
+                    isWin
+                        ? {
+                            cmd: "powershell.exe",
+                            args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", shellCommand],
+                        }
+                        : {
+                            cmd: process.env.SHELL || "/bin/bash",
+                            args: ["-lc", shellCommand],
+                        }
+                )
+                : (
+                    isWin
+                        ? {
+                            // node-pty 在 Windows 下对 PATH 解析比 PowerShell 更严格，统一包装避免 error code 2
+                            cmd: "powershell.exe",
+                            args: [
+                                "-NoLogo",
+                                "-NoProfile",
+                                "-NonInteractive",
+                                "-ExecutionPolicy",
+                                "Bypass",
+                                "-Command",
+                                buildPowerShellCommand(this.command, this.args),
+                            ],
+                        }
+                        : { cmd: this.command, args: this.args }
+                );
+
+            this.pty = ptyMod.spawn(launch.cmd, launch.args, {
+                name: "xterm-color",
+                cols: 120,
+                rows: 30,
+                cwd: this.cwd,
+                env: mergedEnv,
+            });
+            this.ptyMode = true;
+
+            this.pty.onData((chunk) => {
+                this.emit("log", chunk);
+                this.handleOutput(chunk);
+            });
+            this.pty.onExit(({ exitCode, signal }) => {
+                if (this.finished) return;
+                this.finished = true;
+                clearTimeout(this.timer);
+                this.emit("exit", { code: exitCode, signal: String(signal ?? ""), reason: "exit" });
+            });
+
+            if (typeof this.stdinPrompt === "string" && this.stdinPrompt.length > 0) {
+                this.pty.write(this.stdinPrompt);
+                this.pty.write("\r");
+            }
+            return;
+        }
+
+        this.proc = spawn(this.command, this.args, {
+            shell: this.useShell,
+            cwd: this.cwd,
+            env: mergedEnv,
+            stdio: ["pipe", "pipe", "pipe"],
+        });
 
         if (typeof this.stdinPrompt === "string" && this.stdinPrompt.length > 0) {
             this.proc.stdin.write(this.stdinPrompt);
@@ -171,46 +326,106 @@ export class TerminalController extends EventEmitter {
     }
 
     handleOutput(output) {
-        const progressMatch = output.match(/(\d{1,3})%/);
-        if (progressMatch) {
-            const p = Math.max(0, Math.min(100, Number(progressMatch[1])));
+        const p = parseProgress(output);
+        if (p !== null) {
             this.emit("progress", p);
         }
 
-        const protectedPatterns = getProtectedPathPatterns();
-        const sensitiveTouched = protectedPatterns.some((p) => p.test(output));
-        const asksConfirm = APPROVAL_PATTERNS.some((p) => p.test(output));
+        const asksConfirm = AGENT_PROMPT_PATTERNS.CONFIRMATION.some((pattern) => pattern.test(output));
         if (!asksConfirm) return;
-
-        if (sensitiveTouched) {
-            this.emit("prompt", {
-                text: output.slice(-500),
-                protectedHit: true,
+        this.handleApprovalPrompt(output).catch((err) => {
+            this.emit("approval_result", {
+                approved: false,
+                decision: "reject",
+                reason: err?.message || "审批流程异常",
             });
-            return;
-        }
-
-        if (this.autoApprove) {
-            this.proc?.stdin?.write("y\n");
-            this.emit("auto_approved", { text: output.slice(-300) });
-            return;
-        }
-
-        this.emit("prompt", {
-            text: output.slice(-500),
-            protectedHit: false,
+            this.sendInput("n\n");
         });
     }
 
+    async handleApprovalPrompt(output) {
+        const now = Date.now();
+        if (this.awaitingApproval) return;
+        if (now - this.lastApprovalTs < APPROVAL_DEBOUNCE_MS) return;
+        this.lastApprovalTs = now;
+        this.awaitingApproval = true;
+
+        const clipped = String(output).slice(-500);
+        const commandLine = `${this.command} ${(this.args || []).join(" ")}\n${this.taskPrompt || ""}`;
+        const risk = evaluateRisk({
+            commandLine,
+            output: clipped,
+            protectedPatterns: this.protectedPatterns,
+        });
+
+        try {
+            if (this.autoApprove && risk === "low") {
+                this.sendInput("y\n");
+                this.emit("auto_approved", { text: clipped, risk });
+                this.emit("approval_result", { approved: true, decision: "approve", risk });
+                return;
+            }
+
+            this.emit("prompt", { text: clipped, protectedHit: risk !== "low", risk });
+
+            const approval = await approvalManager.requestApproval({
+                actionType: "external_agent_prompt",
+                risk,
+                command: commandLine,
+                message: `${this.agentName} 请求确认输入（风险：${risk}）`,
+                allowModify: false,
+                metadata: {
+                    source: "external_agent",
+                    taskId: this.id,
+                    agentName: this.agentName,
+                    prompt: clipped,
+                },
+            });
+
+            if (approval.approved) {
+                this.sendInput("y\n");
+            } else {
+                this.sendInput("n\n");
+            }
+            this.emit("approval_result", {
+                approved: !!approval.approved,
+                decision: approval.decision || (approval.approved ? "approve" : "reject"),
+                reason: approval.reason || "",
+                risk,
+            });
+        } finally {
+            this.awaitingApproval = false;
+        }
+    }
+
     sendInput(text) {
-        if (!this.proc || this.finished) return false;
-        this.proc.stdin.write(String(text));
+        if (this.finished) return false;
+        const normalized = String(text ?? "");
+        if (this.pty && this.ptyMode) {
+            this.pty.write(normalized.replace(/\n/g, "\r"));
+            return true;
+        }
+        if (!this.proc) return false;
+        this.proc.stdin.write(normalized);
+        return true;
+    }
+
+    resize(cols, rows) {
+        if (!this.pty || !this.ptyMode) return false;
+        const c = Math.max(20, Number(cols) || 120);
+        const r = Math.max(8, Number(rows) || 30);
+        this.pty.resize(c, r);
         return true;
     }
 
     stop(reason = "manual") {
-        if (!this.proc || this.finished) return;
-        this.proc.kill("SIGTERM");
+        if (this.finished) return;
+        if (this.pty && this.ptyMode) {
+            this.pty.kill();
+        }
+        if (this.proc) {
+            this.proc.kill("SIGTERM");
+        }
         this.finished = true;
         clearTimeout(this.timer);
         this.emit("exit", { code: -1, signal: "SIGTERM", reason });
@@ -241,6 +456,7 @@ class TerminalTaskManager {
             timeoutMs,
             extraEnv: plan.extraEnv ?? null,
             envStrip: plan.envStrip ?? null,
+            taskPrompt,
             useShell: typeof plan.useShell === "boolean" ? plan.useShell : true,
             status: "running",
             startedAt,
@@ -262,6 +478,7 @@ class TerminalTaskManager {
             timeoutMs,
             extraEnv: plan.extraEnv ?? null,
             envStrip: plan.envStrip ?? null,
+            taskPrompt,
             useShell: typeof plan.useShell === "boolean" ? plan.useShell : true,
             cwd: process.cwd(),
         });
@@ -306,7 +523,25 @@ class TerminalTaskManager {
                 taskId: id, agentName, text,
             });
         });
+        controller.on("approval_result", ({ approved, decision, reason = "", risk = "high" }) => {
+            task.status = approved ? "running" : "waiting_input";
+            agentBus.push("terminal.approval_result", "metal", "终端审批结果", {
+                taskId: id,
+                agentName,
+                approved,
+                decision,
+                reason,
+                risk,
+            });
+        });
         controller.on("exit", ({ code, reason }) => {
+            if (task.logs.length === 0) {
+                const msg = `[terminal] process exited (code=${code}, reason=${reason || "exit"})\n`;
+                pushLog("stderr", msg);
+                agentBus.push("terminal.stream", "fire", `[${agentName}] 退出信息`, {
+                    taskId: id, agentName, stream: "stderr", chunk: msg,
+                });
+            }
             task.status = "finished";
             task.endedAt = Date.now();
             task.exitCode = code;
@@ -319,7 +554,26 @@ class TerminalTaskManager {
             task.waiters = [];
         });
 
-        controller.execute();
+        controller.execute().catch((err) => {
+            const msg = `[terminal] execute error: ${err?.message || "unknown"}\n`;
+            pushLog("stderr", msg);
+            agentBus.push("terminal.stream", "fire", `[${agentName}] 执行异常`, {
+                taskId: id,
+                agentName,
+                stream: "stderr",
+                chunk: msg,
+            });
+            task.status = "finished";
+            task.endedAt = Date.now();
+            task.exitCode = -1;
+            task.reason = err?.message || "执行失败";
+            agentBus.push("terminal.exit", "fire", `外部代理异常退出：${agentName}`, {
+                taskId: id,
+                agentName,
+                code: -1,
+                reason: task.reason,
+            });
+        });
         return this.getTaskSnapshot(id);
     }
 
@@ -354,6 +608,12 @@ class TerminalTaskManager {
         const ok = task.controller?.sendInput(text);
         if (ok) task.status = "running";
         return !!ok;
+    }
+
+    resizeTask(id, cols, rows) {
+        const task = this.tasks.get(id);
+        if (!task) return false;
+        return !!task.controller?.resize(cols, rows);
     }
 
     stopTask(id) {

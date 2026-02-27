@@ -22,6 +22,9 @@ import { geneticEvolver } from "./src/engine/evolve.js";
 import { sessionManager } from "./src/engine/sessionManager.js";
 import { approvalManager } from "./src/engine/approvalManager.js";
 import { terminalTaskManager } from "./src/engine/terminalController.js";
+import { routeIntent, buildDirectReply } from "./src/engine/intentRouter.js";
+import { auditAssets } from "./src/engine/assetAuditor.js";
+import { queryExperienceUnified, recordExperienceUnified, listRecentExperience } from "./src/engine/experienceCache.js";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import cfg from "./config/wuxing.json" with { type: "json" };
 
@@ -111,6 +114,48 @@ function classifyCommandRisk(cmd) {
     return { risk: "low", actionType: "command", message: "常规命令" };
 }
 
+function loadMcpServers() {
+    try {
+        const mcpPath = resolve(process.cwd(), "config/mcp.json");
+        if (!existsSync(mcpPath)) return [];
+        const parsed = JSON.parse(readFileSync(mcpPath, "utf-8"));
+        const obj = parsed?.mcpServers ?? {};
+        return Object.keys(obj);
+    } catch {
+        return [];
+    }
+}
+
+function buildSelfProfile() {
+    const skillSnapshot = skillManager.status?.() ?? {
+        builtin: [], dynamic: [], mcp: [], mcpStatus: [], total: 0,
+    };
+    return {
+        capabilities: {
+            builtinTools: skillSnapshot.builtin ?? [],
+            dynamicTools: skillSnapshot.dynamic ?? [],
+            mcpTools: skillSnapshot.mcp ?? [],
+            mcpServersConfigured: loadMcpServers(),
+            totalTools: skillSnapshot.total ?? 0,
+        },
+        workflows: [
+            "water -> intuition -> reasoning <-> tools -> reflection",
+            "approval gateway for high risk actions",
+            "external expert terminal orchestration",
+        ],
+        limits: {
+            maxToolCycles: cfg.tools?.maxCycles ?? 25,
+            externalAgentTimeoutMaxMs: 3_600_000,
+            readOnlyMode: false,
+            requiresApprovalForHighRisk: true,
+        },
+        memory: {
+            topK: cfg.memory?.topK ?? 5,
+            entropyEvery: cfg.memory?.entropyTriggerEvery ?? 10,
+        },
+    };
+}
+
 async function executeControlCommand(cmd) {
     let result = "";
 
@@ -195,7 +240,94 @@ async function handleThinkRequest(req, res) {
         const history = sessionMessages.map((m) =>
             m.role === "human" ? new HumanMessage(m.content) : new AIMessage(m.content)
         );
-        const messages = [...history, new HumanMessage(message)];
+        const selfProfile = buildSelfProfile();
+        const route = routeIntent(message, selfProfile);
+        const experience = route.requiresPlanning
+            ? await queryExperienceUnified(message, { topK: 3, vectorMemory })
+            : { hit: false, hits: [], keywords: [] };
+        const assetAudit = route.requiresPlanning ? auditAssets(message, { maxResults: 5 }) : null;
+        agentBus.push(
+            "intent.route",
+            "earth",
+            `路由判定：${route.tier} / ${route.decision}${route.canSkipExpert ? "（跳过专家）" : "（专家门控）"} / fit=${route.capabilityFit}`,
+            {
+                tier: route.tier,
+                decision: route.decision,
+                canSkipExpert: route.canSkipExpert,
+                requiresPlanning: route.requiresPlanning,
+                capabilityFit: route.capabilityFit,
+                capabilityGaps: route.capabilityGaps,
+                plan: route.plan,
+                anchors: route.anchors,
+            }
+        );
+        if (experience.hit) {
+            agentBus.push(
+                "experience.hit",
+                "wood",
+                `命中历史经验 ${experience.hits[0].task?.slice(0, 40)}...`,
+                { keywords: experience.keywords, hits: experience.hits }
+            );
+        }
+        if (assetAudit) {
+            agentBus.push(
+                "asset.audit",
+                "water",
+                assetAudit.summary,
+                {
+                    reuseRecommended: assetAudit.reuseRecommended,
+                    keywords: assetAudit.keywords,
+                    matches: assetAudit.matches,
+                }
+            );
+        }
+
+        const summary = statusBoard.getContext(240);
+        const direct = buildDirectReply(message, route, summary);
+        if ((route.tier === "L1_QUERY" || route.tier === "L2_OBSERVE") && direct) {
+            const finalMessages = [...history, new HumanMessage(message), new AIMessage(direct)];
+            sessionManager.saveHistory(finalMessages);
+            await recordExperienceUnified({
+                task: message,
+                tier: route.tier,
+                decision: route.decision,
+                status: "success",
+                note: "direct_reply",
+                vectorMemory,
+            });
+            return res.json({ answer: direct, rule: null, route, assetAudit: null, experience });
+        }
+
+        const experienceBlock = experience.hit
+            ? (
+                `\n[ExperienceCache]\n` +
+                `keywords=${JSON.stringify(experience.keywords)}\n` +
+                `hits=${JSON.stringify(experience.hits)}\n` +
+                `约束：若历史命中项可复用，优先沿用其 assetPath 对应实现，避免重写。\n`
+            )
+            : "";
+        const reuseBlock = assetAudit
+            ? (
+                `\n[AssetAudit]\n` +
+                `reuseRecommended=${assetAudit.reuseRecommended}\n` +
+                `summary=${assetAudit.summary}\n` +
+                `matches=${JSON.stringify(assetAudit.matches)}\n` +
+                `约束：编码前必须先检查上述资产；若已有高匹配（score>=3），优先复用/扩展，禁止无理由重写。\n`
+            )
+            : "";
+        const planningBlock = route.requiresPlanning
+            ? `\n\n[DecisionNode]\n` +
+              `tier=${route.tier}; decision=${route.decision}\n` +
+              `先输出 Task Plan(JSON: {"steps":[{"id":"S1","action":"","needsExpert":false}]})，` +
+              `优先本地工具，只有复杂编码才可调用外部专家。\n` +
+              `Context Anchor:\n` +
+              `- cwd: ${route.anchors.cwd}\n` +
+              `- recentFailures: ${JSON.stringify(route.anchors.recentFailures)}\n` +
+              experienceBlock +
+              reuseBlock
+            : "";
+        const routedMessage = `${message}${planningBlock}`;
+        const messages = [...history, new HumanMessage(routedMessage)];
 
         const maxCycles = cfg.tools?.maxCycles ?? 25;
 
@@ -209,8 +341,17 @@ async function handleThinkRequest(req, res) {
 
         // 持久化本轮对话
         sessionManager.saveHistory([...messages, new AIMessage(answer)]);
+        await recordExperienceUnified({
+            task: message,
+            tier: route.tier,
+            decision: route.decision,
+            assetPath: assetAudit?.matches?.[0]?.path || experience?.hits?.[0]?.assetPath || "",
+            status: "success",
+            note: assetAudit?.reuseRecommended ? "reuse_recommended" : "new_build_or_unknown",
+            vectorMemory,
+        });
 
-        res.json({ answer, rule: result.rule ?? null });
+        res.json({ answer, rule: result.rule ?? null, route, assetAudit, experience });
     } catch (e) {
         console.error("[服务器] 推理异常：", e.message);
         res.status(500).json({ error: e.message });
@@ -351,6 +492,29 @@ app.get("/api/v1/approval-policy", (req, res) => {
     res.json(approvalManager.getPolicy());
 });
 
+app.get("/api/v1/self-profile", (req, res) => {
+    try {
+        res.json(buildSelfProfile());
+    } catch (e) {
+        res.status(500).json({ error: e.message || "获取自我画像失败" });
+    }
+});
+
+app.get("/api/v1/experience-map", (req, res) => {
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+    res.json({ items: listRecentExperience(limit) });
+});
+
+app.post("/api/v1/approval-policy", (req, res) => {
+    try {
+        const { policy = {}, persist = true } = req.body ?? {};
+        const updated = approvalManager.setPolicy(policy, { persist: !!persist });
+        res.json({ ok: true, policy: updated });
+    } catch (e) {
+        res.status(400).json({ error: e.message || "策略更新失败" });
+    }
+});
+
 app.post("/api/v1/approvals/:id/decision", (req, res) => {
     const { id } = req.params;
     const { decision, patchedCommand = "", reason = "" } = req.body ?? {};
@@ -391,6 +555,13 @@ app.post("/api/v1/external-agent/tasks/:id/input", (req, res) => {
     const { text = "" } = req.body ?? {};
     const ok = terminalTaskManager.sendInput(req.params.id, text);
     if (!ok) return res.status(404).json({ error: "任务不存在或不可输入" });
+    res.json({ ok: true });
+});
+
+app.post("/api/v1/external-agent/tasks/:id/resize", (req, res) => {
+    const { cols = 120, rows = 30 } = req.body ?? {};
+    const ok = terminalTaskManager.resizeTask(req.params.id, cols, rows);
+    if (!ok) return res.status(404).json({ error: "任务不存在或不支持 resize" });
     res.json({ ok: true });
 });
 

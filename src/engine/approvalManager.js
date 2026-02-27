@@ -1,10 +1,12 @@
-import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { agentBus } from "./eventBus.js";
 import { statusBoard } from "./statusBoard.js";
 import agentsCfg from "../../config/agents.json" with { type: "json" };
 
 const AUDIT_FILE = resolve(process.cwd(), "data/audit/approvals.jsonl");
+const AGENTS_CFG_FILE = resolve(process.cwd(), "config/agents.json");
+const RISKS = ["low", "medium", "high", "critical"];
 
 function nowIso() {
     return new Date().toISOString();
@@ -44,8 +46,59 @@ class ApprovalManager {
         };
     }
 
+    _normalizePolicy(next = {}) {
+        const defaults = this._buildPolicy();
+        const riskRules = {};
+        for (const risk of RISKS) {
+            const src = next?.riskRules?.[risk] ?? {};
+            riskRules[risk] = {
+                autoApprove: typeof src.autoApprove === "boolean"
+                    ? src.autoApprove
+                    : defaults.riskRules[risk].autoApprove,
+                timeoutMs: Math.max(5_000, Math.min(600_000,
+                    Number(src.timeoutMs ?? defaults.riskRules[risk].timeoutMs) || defaults.riskRules[risk].timeoutMs)),
+                allowModify: typeof src.allowModify === "boolean"
+                    ? src.allowModify
+                    : defaults.riskRules[risk].allowModify,
+            };
+        }
+        return { riskRules };
+    }
+
+    _persistPolicy(policy) {
+        let json = {};
+        try {
+            if (existsSync(AGENTS_CFG_FILE)) {
+                json = JSON.parse(readFileSync(AGENTS_CFG_FILE, "utf-8"));
+            }
+        } catch {
+            json = {};
+        }
+        json.approvalPolicy = policy;
+        writeFileSync(AGENTS_CFG_FILE, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+    }
+
     getPolicy() {
         return this.policy;
+    }
+
+    setPolicy(nextPolicy, { persist = true } = {}) {
+        const normalized = this._normalizePolicy(nextPolicy);
+        this.policy = normalized;
+        if (persist) {
+            this._persistPolicy(normalized);
+        }
+        agentBus.push("approval.policy.updated", "metal", "审批策略已更新", {
+            policy: normalized,
+            persisted: !!persist,
+        });
+        this._audit({
+            event: "approval.policy.updated",
+            policy: normalized,
+            persisted: !!persist,
+            ts: nowIso(),
+        });
+        return normalized;
     }
 
     getRiskRule(risk = "high") {

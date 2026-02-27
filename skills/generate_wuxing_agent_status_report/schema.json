@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "current_workspace_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "当前工作区的文件列表"
+    },
+    "pending_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "待办事项列表"
+    }
+  },
+  "required": [
+    "current_workspace_files"
+  ]
+}
